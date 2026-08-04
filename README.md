@@ -8,7 +8,9 @@ It docks Outline, Stage, and Timeline tools beside your normal Manim Python — 
 
 ## Status
 
-Early scaffold (Phase 0). Vertical slice in progress: Python outline parse + VS Code Outline view.
+Phase 0–1 scaffold: Outline view, Doctor, **Render Scene (QL)** + thin video preview.
+
+Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains optional for a richer player.
 
 ## Product pillars
 

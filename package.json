@@ -54,6 +54,15 @@
       {
         "command": "manimDock.revealInEditor",
         "title": "Manim Dock: Reveal in Editor"
+      },
+      {
+        "command": "manimDock.renderScene",
+        "title": "Manim Dock: Render Scene (QL)",
+        "icon": "$(play)"
+      },
+      {
+        "command": "manimDock.debugSidecar",
+        "title": "Manim Dock: Debug Sidecar"
       }
     ],
     "menus": {
@@ -61,6 +70,25 @@
         {
           "command": "manimDock.refreshOutline",
           "when": "view == manimDock.outline",
+          "group": "navigation"
+        },
+        {
+          "command": "manimDock.renderScene",
+          "when": "view == manimDock.outline",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "manimDock.renderScene",
+          "when": "view == manimDock.outline && viewItem == manimDock.scene",
+          "group": "inline@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "manimDock.renderScene",
+          "when": "resourceLangId == python",
           "group": "navigation"
         }
       ]
@@ -77,6 +105,18 @@
           "type": "string",
           "default": "manim_dock",
           "description": "Python module name for the sidecar (development default: manim_dock)."
+        },
+        "manimDock.renderQuality": {
+          "type": "string",
+          "default": "l",
+          "enum": ["l", "m", "h", "k"],
+          "enumDescriptions": [
+            "480p15 (fast preview)",
+            "720p30",
+            "1080p60",
+            "2160p60"
+          ],
+          "description": "Manim quality flag for Manim Dock: Render Scene."
         }
       }
     },

@@ -29,7 +29,7 @@ VS Code text editor  +  Manim Dock views (Outline → Stage → Timeline)
 | Phase | Deliverable |
 |-------|-------------|
 | 0 | Scaffold, outline parse, Outline view, doctor stub |
-| 1 | Educational snippets + QL render command |
+| 1 | Educational snippets + QL render command + thin preview *(in progress / landed)* |
 | 2 | Stage + confirm-diff position patches |
 | 3 | Timeline pacing edits |
 | 4 | Library extract + harden |

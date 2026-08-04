@@ -8,7 +8,18 @@ import {
   SourceRange,
 } from "./sidecar";
 
-type OutlineNode = FileNode | SceneNode | MethodNode | EventNode;
+type OutlineNode = StatusNode | FileNode | SceneNode | MethodNode | EventNode;
+
+class StatusNode extends vscode.TreeItem {
+  constructor(message: string, detail?: string) {
+    super(message, vscode.TreeItemCollapsibleState.None);
+    this.contextValue = "manimDock.status";
+    this.iconPath = new vscode.ThemeIcon("warning");
+    // Show detail in the tree (not only tooltip) so Cursor users can read it.
+    this.description = detail ? detail.replace(/\s+/g, " ").slice(0, 140) : undefined;
+    this.tooltip = detail ?? message;
+  }
+}
 
 class FileNode extends vscode.TreeItem {
   constructor(
@@ -25,7 +36,7 @@ class FileNode extends vscode.TreeItem {
   }
 }
 
-class SceneNode extends vscode.TreeItem {
+export class SceneNode extends vscode.TreeItem {
   constructor(
     public readonly filePath: string,
     public readonly scene: OutlineScene
@@ -86,16 +97,103 @@ class EventNode extends vscode.TreeItem {
   }
 }
 
+/** Duck-type tree / command args (instanceof can fail across command invocations). */
+export function asSceneTarget(
+  item: unknown
+): { filePath: string; sceneName: string } | undefined {
+  if (!item || typeof item !== "object") {
+    return undefined;
+  }
+  const rec = item as {
+    filePath?: unknown;
+    scene?: { name?: unknown };
+  };
+  if (
+    typeof rec.filePath === "string" &&
+    rec.scene &&
+    typeof rec.scene.name === "string"
+  ) {
+    return { filePath: rec.filePath, sceneName: rec.scene.name };
+  }
+  return undefined;
+}
+
+function collectPythonCandidatePaths(lastFilePath?: string): string[] {
+  const candidates: string[] = [];
+  const active = vscode.window.activeTextEditor;
+  if (active?.document.languageId === "python" && !active.document.isUntitled) {
+    candidates.push(active.document.uri.fsPath);
+  }
+  for (const ed of vscode.window.visibleTextEditors) {
+    if (ed.document.languageId === "python" && !ed.document.isUntitled) {
+      candidates.push(ed.document.uri.fsPath);
+    }
+  }
+  // Critical in Cursor: sidebar focus may clear active/visible editors.
+  for (const doc of vscode.workspace.textDocuments) {
+    if (doc.languageId === "python" && !doc.isUntitled) {
+      candidates.push(doc.uri.fsPath);
+    }
+  }
+  if (lastFilePath) {
+    candidates.push(lastFilePath);
+  }
+  return [...new Set(candidates)];
+}
+
 export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
   private _onDidChangeTreeData = new vscode.EventEmitter<OutlineNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
   private cache = new Map<string, FileOutline>();
+  private lastFilePath: string | undefined;
+  private lastStatus: string | undefined;
 
-  constructor(private readonly sidecar: SidecarClient) {}
+  constructor(
+    private readonly sidecar: SidecarClient,
+    private readonly output?: vscode.OutputChannel
+  ) {}
 
   refresh(): void {
     this.cache.clear();
     this._onDidChangeTreeData.fire(undefined);
+  }
+
+  getLastFilePath(): string | undefined {
+    return this.lastFilePath;
+  }
+
+  async resolvePythonOutline(): Promise<
+    | { filePath: string; outline: FileOutline }
+    | { error: string }
+  > {
+    const candidates = collectPythonCandidatePaths(this.lastFilePath);
+    const problems: string[] = [];
+
+    for (const filePath of candidates) {
+      const outline = await this.loadOutline(filePath);
+      if (outline.errors.length) {
+        problems.push(`${filePath}: ${outline.errors.join("; ")}`);
+        continue;
+      }
+      if (outline.scenes.length) {
+        this.lastFilePath = filePath;
+        this.lastStatus = undefined;
+        return { filePath, outline };
+      }
+      problems.push(`${filePath}: no Scene subclasses found`);
+    }
+
+    if (!candidates.length) {
+      return {
+        error:
+          "Open a Manim .py file (e.g. examples/minimal_lesson/lesson.py), click in the editor, then refresh Outline.",
+      };
+    }
+    return {
+      error: problems.length
+        ? problems.join("\n")
+        : `No Scene classes found in:\n${candidates.join("\n")}`,
+    };
   }
 
   getTreeItem(element: OutlineNode): vscode.TreeItem {
@@ -104,16 +202,42 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
 
   async getChildren(element?: OutlineNode): Promise<OutlineNode[]> {
     if (!element) {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.document.languageId !== "python") {
-        return [];
+      const resolved = await this.resolvePythonOutline();
+      if ("error" in resolved) {
+        this.lastStatus = resolved.error;
+        this.output?.appendLine(`[outline] ${resolved.error}`);
+        void vscode.window.showErrorMessage(
+          `Manim Dock outline failed — see Output “Manim Dock” or run “Manim Dock: Debug Sidecar”.`,
+          "Open Output"
+        ).then((choice) => {
+          if (choice === "Open Output") {
+            this.output?.show(true);
+          }
+        });
+        const firstLine = resolved.error.split("\n")[0] ?? resolved.error;
+        return [
+          new StatusNode("No scene outline available", firstLine),
+          new StatusNode(
+            "Run: Manim Dock: Debug Sidecar",
+            resolved.error
+          ),
+        ];
       }
-      const filePath = editor.document.uri.fsPath;
-      const outline = await this.loadOutline(filePath, editor.document.getText());
-      return [new FileNode(filePath, outline)];
+      this.lastFilePath = resolved.filePath;
+      return [new FileNode(resolved.filePath, resolved.outline)];
+    }
+
+    if (element instanceof StatusNode) {
+      return [];
     }
 
     if (element instanceof FileNode) {
+      if (element.outline.errors.length) {
+        return element.outline.errors.map((e) => new StatusNode(e));
+      }
+      if (!element.outline.scenes.length) {
+        return [new StatusNode("No Scene subclasses in this file")];
+      }
       return element.outline.scenes.map(
         (scene) => new SceneNode(element.filePath, scene)
       );
@@ -134,7 +258,7 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
     return [];
   }
 
-  private async loadOutline(filePath: string, _text: string): Promise<FileOutline> {
+  private async loadOutline(filePath: string): Promise<FileOutline> {
     const cached = this.cache.get(filePath);
     if (cached) {
       return cached;
@@ -142,6 +266,9 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
     try {
       const outline = await this.sidecar.outline(filePath);
       this.cache.set(filePath, outline);
+      if (!outline.errors.length && outline.scenes.length) {
+        this.lastFilePath = filePath;
+      }
       return outline;
     } catch (err) {
       const failed: FileOutline = {

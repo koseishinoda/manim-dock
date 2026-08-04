@@ -1,14 +1,22 @@
 import * as vscode from "vscode";
-import { OutlineProvider, revealRange } from "./outlineTree";
+import {
+  asSceneTarget,
+  OutlineProvider,
+  revealRange,
+} from "./outlineTree";
+import { PreviewPanel } from "./previewPanel";
 import { SidecarClient, SourceRange } from "./sidecar";
 
 export function activate(context: vscode.ExtensionContext): void {
   const sidecar = new SidecarClient(context.extensionPath);
-  const outlineProvider = new OutlineProvider(sidecar);
+  const output = vscode.window.createOutputChannel("Manim Dock");
+  const outlineProvider = new OutlineProvider(sidecar, output);
 
   context.subscriptions.push(
+    output,
     vscode.window.registerTreeDataProvider("manimDock.outline", outlineProvider),
     vscode.commands.registerCommand("manimDock.refreshOutline", () => {
+      output.appendLine("Refreshing outline…");
       outlineProvider.refresh();
     }),
     vscode.commands.registerCommand(
@@ -32,6 +40,30 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showErrorMessage(`Manim Dock doctor failed: ${String(err)}`);
       }
     }),
+    vscode.commands.registerCommand("manimDock.debugSidecar", async () => {
+      const editor = vscode.window.activeTextEditor;
+      const sample =
+        editor?.document.languageId === "python"
+          ? editor.document.uri.fsPath
+          : vscode.workspace.workspaceFolders?.[0]
+            ? `${vscode.workspace.workspaceFolders[0].uri.fsPath}/examples/minimal_lesson/lesson.py`
+            : undefined;
+      const report = await sidecar.debugReport(sample);
+      output.clear();
+      output.appendLine(report);
+      output.show(true);
+      const doc = await vscode.workspace.openTextDocument({
+        content: report + "\n",
+        language: "plaintext",
+      });
+      await vscode.window.showTextDocument(doc, { preview: true });
+    }),
+    vscode.commands.registerCommand(
+      "manimDock.renderScene",
+      async (item?: unknown) => {
+        await renderSceneCommand(sidecar, outlineProvider, output, item);
+      }
+    ),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor?.document.languageId === "python") {
         outlineProvider.refresh();
@@ -42,6 +74,87 @@ export function activate(context: vscode.ExtensionContext): void {
         outlineProvider.refresh();
       }
     })
+  );
+}
+
+async function renderSceneCommand(
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<void> {
+  let filePath: string | undefined;
+  let sceneName: string | undefined;
+
+  const fromTree = asSceneTarget(item);
+  if (fromTree) {
+    filePath = fromTree.filePath;
+    sceneName = fromTree.sceneName;
+  } else {
+    const resolved = await outlineProvider.resolvePythonOutline();
+    if ("error" in resolved) {
+      output.appendLine(resolved.error);
+      void vscode.window.showErrorMessage(`Manim Dock: ${resolved.error}`);
+      return;
+    }
+    filePath = resolved.filePath;
+    if (resolved.outline.scenes.length === 1) {
+      sceneName = resolved.outline.scenes[0].name;
+    } else {
+      const picked = await vscode.window.showQuickPick(
+        resolved.outline.scenes.map((s) => s.name),
+        { placeHolder: "Select a Scene to render (QL)" }
+      );
+      if (!picked) {
+        return;
+      }
+      sceneName = picked;
+    }
+  }
+
+  if (!filePath || !sceneName) {
+    return;
+  }
+
+  const quality =
+    vscode.workspace.getConfiguration("manimDock").get<string>("renderQuality") ||
+    "l";
+
+  output.show(true);
+  output.appendLine(`\n=== Render ${sceneName} (${filePath}) quality=${quality} ===`);
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `Manim Dock: rendering ${sceneName}…`,
+      cancellable: false,
+    },
+    async () => {
+      try {
+        const result = await sidecar.render(filePath!, sceneName!, quality, (chunk) => {
+          output.append(chunk);
+        });
+        if (result.log_tail) {
+          output.appendLine("\n--- log tail ---");
+          output.appendLine(result.log_tail);
+        }
+        if (!result.ok || !result.output_path) {
+          void vscode.window.showErrorMessage(
+            `Manim Dock render failed: ${result.error ?? "unknown error"}. See “Manim Dock” output.`
+          );
+          return;
+        }
+        PreviewPanel.show(result.output_path, sceneName);
+        void vscode.window.showInformationMessage(
+          `Manim Dock: rendered ${sceneName}`
+        );
+      } catch (err) {
+        output.appendLine(String(err));
+        void vscode.window.showErrorMessage(
+          `Manim Dock render failed: ${String(err)}. Run Doctor if manim is missing.`
+        );
+      }
+    }
   );
 }
 

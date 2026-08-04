@@ -6,6 +6,7 @@ Parses ManimCE scene files and (later) applies surgical source patches for the V
 
 ```bash
 python -m manim_dock.cli outline path/to/scene.py
+python -m manim_dock.cli render path/to/scene.py SceneName --quality l
 python -m manim_dock.cli doctor
 ```
 

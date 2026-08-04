@@ -14,6 +14,7 @@ from typing import Any
 
 from manim_dock.doctor import run_doctor
 from manim_dock.outline import parse_file
+from manim_dock.render import render_scene
 
 
 def _handle(method: str, params: dict[str, Any]) -> Any:
@@ -24,6 +25,13 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         if not path:
             raise ValueError("params.path is required")
         return parse_file(path).to_dict()
+    if method == "render":
+        path = params.get("path")
+        scene = params.get("scene")
+        if not path or not scene:
+            raise ValueError("params.path and params.scene are required")
+        quality = params.get("quality") or "l"
+        return render_scene(path, scene, quality=str(quality)).to_dict()
     if method == "doctor":
         return {"probes": [p.to_dict() for p in run_doctor()]}
     raise ValueError(f"unknown method: {method}")
