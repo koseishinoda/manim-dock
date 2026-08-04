@@ -1,0 +1,101 @@
+{
+  "name": "manim-dock",
+  "displayName": "Manim Dock",
+  "description": "Dock Outline, Stage, and Timeline beside ManimCE Python for educational video production.",
+  "version": "0.0.1",
+  "publisher": "manim-dock",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "manim",
+    "manimce",
+    "animation",
+    "education"
+  ],
+  "activationEvents": [
+    "onLanguage:python",
+    "workspaceContains:**/*.py"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "manim-dock",
+          "title": "Manim Dock",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "manim-dock": [
+        {
+          "id": "manimDock.outline",
+          "name": "Outline"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "manimDock.refreshOutline",
+        "title": "Manim Dock: Refresh Outline",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "manimDock.doctor",
+        "title": "Manim Dock: Doctor"
+      },
+      {
+        "command": "manimDock.revealInEditor",
+        "title": "Manim Dock: Reveal in Editor"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "manimDock.refreshOutline",
+          "when": "view == manimDock.outline",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Manim Dock",
+      "properties": {
+        "manimDock.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python interpreter for the Manim Dock sidecar. Empty = use the VS Code Python extension interpreter, else `python3`."
+        },
+        "manimDock.sidecarModule": {
+          "type": "string",
+          "default": "manim_dock",
+          "description": "Python module name for the sidecar (development default: manim_dock)."
+        }
+      }
+    },
+    "snippets": [
+      {
+        "language": "python",
+        "path": "./snippets/manim-dock.code-snippets"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc -p ./ --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}

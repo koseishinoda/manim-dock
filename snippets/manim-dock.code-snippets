@@ -1,0 +1,56 @@
+{
+  "Manim Dock: Section marker": {
+    "prefix": "md-section",
+    "body": [
+      "self.next_section(\"${1:Name}\")",
+      "$0"
+    ],
+    "description": "P12 — ManimCE section marker for chapterized video"
+  },
+  "Manim Dock: Title card": {
+    "prefix": "md-title",
+    "body": [
+      "title = Text(\"${1:Hook question?}\", font_size=40)",
+      "title.to_edge(UP)",
+      "self.play(Write(title), run_time=1.2)",
+      "self.wait(${2:0.5})",
+      "$0"
+    ],
+    "description": "P01 — title / hook card"
+  },
+  "Manim Dock: Step list": {
+    "prefix": "md-steps",
+    "body": [
+      "steps = VGroup(",
+      "    Text(\"1. ${1:First}\"),",
+      "    Text(\"2. ${2:Second}\"),",
+      "    Text(\"3. ${3:Third}\"),",
+      ").arrange(DOWN, aligned_edge=LEFT, buff=0.3)",
+      "self.play(LaggedStart(*[FadeIn(s, shift=RIGHT * 0.2) for s in steps], lag_ratio=0.35))",
+      "self.wait(${4:0.5})",
+      "$0"
+    ],
+    "description": "P03 — lagged step list reveal"
+  },
+  "Manim Dock: Equation emphasize": {
+    "prefix": "md-eq",
+    "body": [
+      "eq = MathTex(\"${1:{{a}}^2}\", \"${2:+}\", \"${3:{{b}}^2}\", \"${4:=}\", \"${5:{{c}}^2}\")",
+      "self.play(Write(eq))",
+      "self.play(Indicate(eq[${6:0}]))",
+      "self.wait(${7:0.5})",
+      "$0"
+    ],
+    "description": "P04 — MathTex write + Indicate"
+  },
+  "Manim Dock: TransformMatchingTex": {
+    "prefix": "md-tmt",
+    "body": [
+      "eq2 = MathTex(${1:\"{{a}}^2\", \"=\", \"{{c}}^2\", \"-\", \"{{b}}^2\"})",
+      "self.play(TransformMatchingTex(${2:eq}, eq2), run_time=${3:1.5})",
+      "self.wait(${4:0.5})",
+      "$0"
+    ],
+    "description": "P05 — derivation step via TransformMatchingTex"
+  }
+}

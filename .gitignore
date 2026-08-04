@@ -1,0 +1,32 @@
+# Node / VS Code extension
+node_modules/
+out/
+dist/
+*.vsix
+.vscode-test/
+.turbo/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Manim render outputs (keep extension icon at /media/icon.svg)
+**/media/videos/
+**/media/images/
+**/media/texts/
+**/media/Tex/
+examples/**/media/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+*.log
