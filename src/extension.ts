@@ -6,11 +6,13 @@ import {
 } from "./outlineTree";
 import { PreviewPanel } from "./previewPanel";
 import { SidecarClient, SourceRange } from "./sidecar";
+import { StagePanel } from "./stagePanel";
 
 export function activate(context: vscode.ExtensionContext): void {
   const sidecar = new SidecarClient(context.extensionPath);
   const output = vscode.window.createOutputChannel("Manim Dock");
   const outlineProvider = new OutlineProvider(sidecar, output);
+  StagePanel.ensureProposedProvider(context);
 
   context.subscriptions.push(
     output,
@@ -64,6 +66,12 @@ export function activate(context: vscode.ExtensionContext): void {
         await renderSceneCommand(sidecar, outlineProvider, output, item);
       }
     ),
+    vscode.commands.registerCommand(
+      "manimDock.openStage",
+      async (item?: unknown) => {
+        await openStageCommand(context, sidecar, outlineProvider, output, item);
+      }
+    ),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor?.document.languageId === "python") {
         outlineProvider.refresh();
@@ -77,44 +85,69 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
+async function resolveSceneTarget(
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<{ filePath: string; sceneName: string } | undefined> {
+  const fromTree = asSceneTarget(item);
+  if (fromTree) {
+    return fromTree;
+  }
+  const resolved = await outlineProvider.resolvePythonOutline();
+  if ("error" in resolved) {
+    output.appendLine(resolved.error);
+    void vscode.window.showErrorMessage(`Manim Dock: ${resolved.error}`);
+    return undefined;
+  }
+  if (resolved.outline.scenes.length === 1) {
+    return {
+      filePath: resolved.filePath,
+      sceneName: resolved.outline.scenes[0].name,
+    };
+  }
+  const picked = await vscode.window.showQuickPick(
+    resolved.outline.scenes.map((s) => s.name),
+    { placeHolder: "Select a Scene" }
+  );
+  if (!picked) {
+    return undefined;
+  }
+  return { filePath: resolved.filePath, sceneName: picked };
+}
+
+async function openStageCommand(
+  context: vscode.ExtensionContext,
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<void> {
+  const target = await resolveSceneTarget(outlineProvider, output, item);
+  if (!target) {
+    return;
+  }
+  output.appendLine(`\n=== Stage ${target.sceneName} (${target.filePath}) ===`);
+  await StagePanel.open(
+    context,
+    sidecar,
+    output,
+    target.filePath,
+    target.sceneName
+  );
+}
+
 async function renderSceneCommand(
   sidecar: SidecarClient,
   outlineProvider: OutlineProvider,
   output: vscode.OutputChannel,
   item?: unknown
 ): Promise<void> {
-  let filePath: string | undefined;
-  let sceneName: string | undefined;
-
-  const fromTree = asSceneTarget(item);
-  if (fromTree) {
-    filePath = fromTree.filePath;
-    sceneName = fromTree.sceneName;
-  } else {
-    const resolved = await outlineProvider.resolvePythonOutline();
-    if ("error" in resolved) {
-      output.appendLine(resolved.error);
-      void vscode.window.showErrorMessage(`Manim Dock: ${resolved.error}`);
-      return;
-    }
-    filePath = resolved.filePath;
-    if (resolved.outline.scenes.length === 1) {
-      sceneName = resolved.outline.scenes[0].name;
-    } else {
-      const picked = await vscode.window.showQuickPick(
-        resolved.outline.scenes.map((s) => s.name),
-        { placeHolder: "Select a Scene to render (QL)" }
-      );
-      if (!picked) {
-        return;
-      }
-      sceneName = picked;
-    }
-  }
-
-  if (!filePath || !sceneName) {
+  const target = await resolveSceneTarget(outlineProvider, output, item);
+  if (!target) {
     return;
   }
+  const { filePath, sceneName } = target;
 
   const quality =
     vscode.workspace.getConfiguration("manimDock").get<string>("renderQuality") ||
@@ -131,7 +164,7 @@ async function renderSceneCommand(
     },
     async () => {
       try {
-        const result = await sidecar.render(filePath!, sceneName!, quality, (chunk) => {
+        const result = await sidecar.render(filePath, sceneName, quality, (chunk) => {
           output.append(chunk);
         });
         if (result.log_tail) {

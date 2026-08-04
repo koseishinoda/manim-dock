@@ -9,9 +9,10 @@ VS Code text editor  +  Manim Dock views (Outline → Stage → Timeline)
          ▼
  Python sidecar (stdio JSON-RPC)
    ├─ outline / scene-view model (read)
-   ├─ surgical patches (libcst) — later
+   ├─ layout view model (AST heuristics)
+   ├─ surgical patches (libcst propose → confirm-diff → apply)
    ├─ doctor probes
-   └─ manim CLI orchestration — later
+   └─ manim CLI orchestration (QL render)
          │
          ▼
  User .py  +  manim  +  media/
@@ -29,8 +30,8 @@ VS Code text editor  +  Manim Dock views (Outline → Stage → Timeline)
 | Phase | Deliverable |
 |-------|-------------|
 | 0 | Scaffold, outline parse, Outline view, doctor stub |
-| 1 | Educational snippets + QL render command + thin preview *(in progress / landed)* |
-| 2 | Stage + confirm-diff position patches |
+| 1 | Educational snippets + QL render command + thin preview |
+| 2 | Stage (Konva) + confirm-diff relative `shift` patches *(landed)* |
 | 3 | Timeline pacing edits |
 | 4 | Library extract + harden |
 

@@ -13,7 +13,9 @@ import sys
 from typing import Any
 
 from manim_dock.doctor import run_doctor
+from manim_dock.layout import parse_file_layout
 from manim_dock.outline import parse_file
+from manim_dock.patch_layout import propose_shift_file
 from manim_dock.render import render_scene
 
 
@@ -25,6 +27,39 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         if not path:
             raise ValueError("params.path is required")
         return parse_file(path).to_dict()
+    if method == "layout":
+        path = params.get("path")
+        scene = params.get("scene")
+        if not path or not scene:
+            raise ValueError("params.path and params.scene are required")
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.layout import parse_scene_layout
+
+            return parse_scene_layout(source, str(path), str(scene)).to_dict()
+        return parse_file_layout(path, str(scene)).to_dict()
+    if method == "propose_shift":
+        path = params.get("path")
+        name = params.get("name")
+        if not path or not name:
+            raise ValueError("params.path and params.name are required")
+        dx = float(params.get("dx") or 0)
+        dy = float(params.get("dy") or 0)
+        anchor = params.get("anchor_line")
+        anchor_line = int(anchor) if anchor is not None else None
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_layout import propose_shift
+
+            return propose_shift(
+                source,
+                path=str(path),
+                name=str(name),
+                dx=dx,
+                dy=dy,
+                anchor_line=anchor_line,
+            ).to_dict()
+        return propose_shift_file(str(path), str(name), dx, dy, anchor_line).to_dict()
     if method == "render":
         path = params.get("path")
         scene = params.get("scene")

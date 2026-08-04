@@ -49,6 +49,45 @@ export interface RenderResult {
   error: string | null;
 }
 
+export interface LayoutCall {
+  kind: string;
+  code: string;
+  range: SourceRange;
+}
+
+export interface LayoutItem {
+  name: string;
+  mobject_kind: string;
+  range: SourceRange;
+  layout_calls: LayoutCall[];
+  x: number;
+  y: number;
+  editable: boolean;
+  note: string;
+}
+
+export interface SceneLayout {
+  path: string;
+  scene: string;
+  frame_width: number;
+  frame_height: number;
+  items: LayoutItem[];
+  errors: string[];
+}
+
+export interface PatchProposal {
+  ok: boolean;
+  path: string;
+  name: string;
+  dx: number;
+  dy: number;
+  original: string;
+  proposed: string;
+  diff: string;
+  error: string | null;
+  summary: string;
+}
+
 function sidecarRoots(extensionPath: string): string[] {
   const roots: string[] = [];
   const fromExt = path.join(extensionPath, "python");
@@ -255,6 +294,53 @@ print(json.dumps(render_scene(${JSON.stringify(filePath)}, ${JSON.stringify(scen
 `.trim();
 }
 
+function layoutInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  sceneName: string,
+  source: string | undefined
+): string {
+  if (source !== undefined) {
+    return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.layout import parse_scene_layout
+src = ${JSON.stringify(source)}
+print(json.dumps(parse_scene_layout(src, ${JSON.stringify(filePath)}, ${JSON.stringify(sceneName)}).to_dict()))
+`.trim();
+  }
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.layout import parse_file_layout
+print(json.dumps(parse_file_layout(${JSON.stringify(filePath)}, ${JSON.stringify(sceneName)}).to_dict()))
+`.trim();
+}
+
+function proposeShiftInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  name: string,
+  dx: number,
+  dy: number,
+  source: string,
+  anchorLine: number | undefined
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.patch_layout import propose_shift
+print(json.dumps(propose_shift(
+    ${JSON.stringify(source)},
+    path=${JSON.stringify(filePath)},
+    name=${JSON.stringify(name)},
+    dx=${JSON.stringify(dx)},
+    dy=${JSON.stringify(dy)},
+    anchor_line=${anchorLine === undefined ? "None" : JSON.stringify(anchorLine)},
+).to_dict()))
+`.trim();
+}
+
 export class SidecarClient {
   constructor(private readonly extensionPath: string) {}
 
@@ -312,6 +398,69 @@ export class SidecarClient {
       }
     }
     throw new Error(`doctor failed:\n${errors.join("\n")}`);
+  }
+
+  async layout(
+    filePath: string,
+    sceneName: string,
+    source?: string
+  ): Promise<SceneLayout> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<SceneLayout>(bin, [
+            "-c",
+            layoutInlineCode(root, filePath, sceneName, source),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`layout failed:\n${errors.join("\n")}`);
+  }
+
+  async proposeShift(
+    filePath: string,
+    name: string,
+    dx: number,
+    dy: number,
+    source: string,
+    anchorLine?: number
+  ): Promise<PatchProposal> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<PatchProposal>(bin, [
+            "-c",
+            proposeShiftInlineCode(
+              root,
+              filePath,
+              name,
+              dx,
+              dy,
+              source,
+              anchorLine
+            ),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`propose_shift failed:\n${errors.join("\n")}`);
   }
 
   async render(

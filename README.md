@@ -8,9 +8,11 @@ It docks Outline, Stage, and Timeline tools beside your normal Manim Python — 
 
 ## Status
 
-Phase 0–1 scaffold: Outline view, Doctor, **Render Scene (QL)** + thin video preview.
+Phase 0–2: Outline, Doctor, **Render Scene (QL)** + thin preview, **Stage (Konva)** with confirm-diff relative `shift` patches.
 
 Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains optional for a richer player.
+
+**Try Stage:** open `examples/minimal_lesson/lesson.py` → command **Manim Dock: Open Stage** (or the Stage icon on the Outline title bar) → drag a proxy → review the diff → Apply.
 
 ## Product pillars
 
@@ -30,8 +32,8 @@ Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains 
 ```text
 ├── package.json          # VS Code extension
 ├── src/                  # Extension host (TypeScript)
-├── webview/              # Stage / Timeline UI (later)
-├── python/               # Sidecar: outline, patches, doctor
+├── media/                # Extension icons + vendored Konva
+├── python/               # Sidecar: outline, layout, patches, doctor, render
 ├── examples/             # Sample ManimCE lessons
 ├── snippets/             # Educational snippet stubs
 ├── docs/                 # Architecture & product law

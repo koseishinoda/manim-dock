@@ -7,7 +7,9 @@ import json
 import sys
 
 from manim_dock.doctor import run_doctor
+from manim_dock.layout import parse_file_layout
 from manim_dock.outline import parse_file
+from manim_dock.patch_layout import propose_shift_file
 from manim_dock.render import render_scene
 from manim_dock.server import serve
 
@@ -18,6 +20,22 @@ def main(argv: list[str] | None = None) -> int:
 
     outline_p = sub.add_parser("outline", help="Print scene outline as JSON")
     outline_p.add_argument("path", help="Path to a .py scene file")
+
+    layout_p = sub.add_parser("layout", help="Print Stage layout view model as JSON")
+    layout_p.add_argument("path", help="Path to a .py scene file")
+    layout_p.add_argument("scene", help="Scene class name")
+
+    shift_p = sub.add_parser("propose-shift", help="Propose a relative shift patch (no write)")
+    shift_p.add_argument("path", help="Path to a .py scene file")
+    shift_p.add_argument("name", help="Local mobject variable name")
+    shift_p.add_argument("--dx", type=float, required=True, help="Delta x in Manim units")
+    shift_p.add_argument("--dy", type=float, required=True, help="Delta y in Manim units")
+    shift_p.add_argument(
+        "--anchor-line",
+        type=int,
+        default=None,
+        help="1-based line inside the owning function (scopes the patch)",
+    )
 
     render_p = sub.add_parser("render", help="Render a scene with ManimCE (default -ql)")
     render_p.add_argument("path", help="Path to a .py scene file")
@@ -38,6 +56,24 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(data, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 1 if data.get("errors") else 0
+
+    if args.command == "layout":
+        data = parse_file_layout(args.path, args.scene).to_dict()
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 1 if data.get("errors") else 0
+
+    if args.command == "propose-shift":
+        data = propose_shift_file(
+            args.path, args.name, args.dx, args.dy, args.anchor_line
+        ).to_dict()
+        # Keep payload small in CLI: drop full sources unless failed.
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
 
     if args.command == "render":
         result = render_scene(args.path, args.scene, quality=args.quality)
