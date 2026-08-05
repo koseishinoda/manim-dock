@@ -10,8 +10,10 @@ from manim_dock.doctor import run_doctor
 from manim_dock.layout import parse_file_layout
 from manim_dock.outline import parse_file
 from manim_dock.patch_layout import propose_shift_file
+from manim_dock.patch_timing import propose_duration_file
 from manim_dock.render import render_scene
 from manim_dock.server import serve
+from manim_dock.timeline import parse_file_timeline
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,6 +38,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="1-based line inside the owning function (scopes the patch)",
     )
+
+    timeline_p = sub.add_parser("timeline", help="Print Timeline view model as JSON")
+    timeline_p.add_argument("path", help="Path to a .py scene file")
+    timeline_p.add_argument("scene", help="Scene class name")
+
+    dur_p = sub.add_parser(
+        "propose-duration", help="Propose a wait/run_time patch (no write)"
+    )
+    dur_p.add_argument("path", help="Path to a .py scene file")
+    dur_p.add_argument("kind", choices=["play", "wait"], help="Event kind")
+    dur_p.add_argument("line", type=int, help="1-based line of the self.play/wait call")
+    dur_p.add_argument("--duration", type=float, required=True, help="New duration seconds")
 
     render_p = sub.add_parser("render", help="Render a scene with ManimCE (default -ql)")
     render_p.add_argument("path", help="Path to a .py scene file")
@@ -68,6 +82,23 @@ def main(argv: list[str] | None = None) -> int:
             args.path, args.name, args.dx, args.dy, args.anchor_line
         ).to_dict()
         # Keep payload small in CLI: drop full sources unless failed.
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "timeline":
+        data = parse_file_timeline(args.path, args.scene).to_dict()
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 1 if data.get("errors") else 0
+
+    if args.command == "propose-duration":
+        data = propose_duration_file(
+            args.path, args.kind, args.line, args.duration
+        ).to_dict()
         if data.get("ok"):
             data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
             data["proposed_omitted"] = True

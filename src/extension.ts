@@ -6,13 +6,15 @@ import {
 } from "./outlineTree";
 import { PreviewPanel } from "./previewPanel";
 import { SidecarClient, SourceRange } from "./sidecar";
+import { ProposedPatchProvider } from "./patchConfirm";
 import { StagePanel } from "./stagePanel";
+import { TimelinePanel } from "./timelinePanel";
 
 export function activate(context: vscode.ExtensionContext): void {
   const sidecar = new SidecarClient(context.extensionPath);
   const output = vscode.window.createOutputChannel("Manim Dock");
   const outlineProvider = new OutlineProvider(sidecar, output);
-  StagePanel.ensureProposedProvider(context);
+  ProposedPatchProvider.ensure(context);
 
   context.subscriptions.push(
     output,
@@ -72,6 +74,12 @@ export function activate(context: vscode.ExtensionContext): void {
         await openStageCommand(context, sidecar, outlineProvider, output, item);
       }
     ),
+    vscode.commands.registerCommand(
+      "manimDock.openTimeline",
+      async (item?: unknown) => {
+        await openTimelineCommand(context, sidecar, outlineProvider, output, item);
+      }
+    ),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor?.document.languageId === "python") {
         outlineProvider.refresh();
@@ -129,6 +137,29 @@ async function openStageCommand(
   }
   output.appendLine(`\n=== Stage ${target.sceneName} (${target.filePath}) ===`);
   await StagePanel.open(
+    context,
+    sidecar,
+    output,
+    target.filePath,
+    target.sceneName
+  );
+}
+
+async function openTimelineCommand(
+  context: vscode.ExtensionContext,
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<void> {
+  const target = await resolveSceneTarget(outlineProvider, output, item);
+  if (!target) {
+    return;
+  }
+  output.appendLine(
+    `\n=== Timeline ${target.sceneName} (${target.filePath}) ===`
+  );
+  await TimelinePanel.open(
     context,
     sidecar,
     output,

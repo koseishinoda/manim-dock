@@ -31,8 +31,8 @@ VS Code text editor  +  Manim Dock views (Outline → Stage → Timeline)
 |-------|-------------|
 | 0 | Scaffold, outline parse, Outline view, doctor stub |
 | 1 | Educational snippets + QL render command + thin preview |
-| 2 | Stage (Konva) + confirm-diff relative `shift` patches *(landed)* |
-| 3 | Timeline pacing edits |
+| 2 | Stage (Konva) + confirm-diff relative `shift` patches |
+| 3 | Timeline pacing edits (`run_time` / `wait`) *(landed)* |
 | 4 | Library extract + harden |
 
 ## Subagents

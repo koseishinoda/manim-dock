@@ -16,7 +16,9 @@ from manim_dock.doctor import run_doctor
 from manim_dock.layout import parse_file_layout
 from manim_dock.outline import parse_file
 from manim_dock.patch_layout import propose_shift_file
+from manim_dock.patch_timing import propose_duration_file
 from manim_dock.render import render_scene
+from manim_dock.timeline import parse_file_timeline
 
 
 def _handle(method: str, params: dict[str, Any]) -> Any:
@@ -60,6 +62,38 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
                 anchor_line=anchor_line,
             ).to_dict()
         return propose_shift_file(str(path), str(name), dx, dy, anchor_line).to_dict()
+    if method == "timeline":
+        path = params.get("path")
+        scene = params.get("scene")
+        if not path or not scene:
+            raise ValueError("params.path and params.scene are required")
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.timeline import parse_scene_timeline
+
+            return parse_scene_timeline(source, str(path), str(scene)).to_dict()
+        return parse_file_timeline(path, str(scene)).to_dict()
+    if method == "propose_duration":
+        path = params.get("path")
+        kind = params.get("kind")
+        line = params.get("line")
+        if not path or not kind or line is None:
+            raise ValueError("params.path, params.kind, and params.line are required")
+        duration = float(params.get("duration") or 0)
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_timing import propose_duration
+
+            return propose_duration(
+                source,
+                path=str(path),
+                kind=str(kind),
+                line=int(line),
+                duration=duration,
+            ).to_dict()
+        return propose_duration_file(
+            str(path), str(kind), int(line), duration
+        ).to_dict()
     if method == "render":
         path = params.get("path")
         scene = params.get("scene")

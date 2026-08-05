@@ -1,15 +1,8 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { revealRange } from "./outlineTree";
+import { ProposedPatchProvider, confirmAndApplyPatch } from "./patchConfirm";
 import { SceneLayout, SidecarClient } from "./sidecar";
-
-interface PendingPatch {
-  path: string;
-  original: string;
-  proposed: string;
-  summary: string;
-  diff: string;
-}
 
 /**
  * Konva Stage webview — heuristic layout proxies; drag → confirm-diff → apply.
@@ -17,14 +10,12 @@ interface PendingPatch {
 export class StagePanel {
   public static readonly viewType = "manimDock.stage";
   private static current: StagePanel | undefined;
-  private static proposedProvider: ProposedPatchProvider | undefined;
 
   private readonly panel: vscode.WebviewPanel;
   private disposables: vscode.Disposable[] = [];
   private filePath: string | undefined;
   private sceneName: string | undefined;
   private layout: SceneLayout | undefined;
-  private pending: PendingPatch | undefined;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -44,17 +35,8 @@ export class StagePanel {
     this.panel.webview.html = this.getHtml();
   }
 
-  static ensureProposedProvider(context: vscode.ExtensionContext): ProposedPatchProvider {
-    if (!StagePanel.proposedProvider) {
-      StagePanel.proposedProvider = new ProposedPatchProvider();
-      context.subscriptions.push(
-        vscode.workspace.registerTextDocumentContentProvider(
-          ProposedPatchProvider.scheme,
-          StagePanel.proposedProvider
-        )
-      );
-    }
-    return StagePanel.proposedProvider;
+  static ensureProposedProvider(context: vscode.ExtensionContext): void {
+    ProposedPatchProvider.ensure(context);
   }
 
   static async open(
@@ -186,69 +168,18 @@ export class StagePanel {
       return;
     }
 
-    this.pending = {
-      path: this.filePath,
-      original: proposal.original,
-      proposed: proposal.proposed,
-      summary: proposal.summary,
-      diff: proposal.diff,
-    };
-
-    const provider = StagePanel.ensureProposedProvider(this.context);
-    const proposedUri = provider.set(this.filePath, proposal.proposed);
-    await vscode.commands.executeCommand(
-      "vscode.diff",
-      vscode.Uri.file(this.filePath),
-      proposedUri,
-      `Manim Dock: ${proposal.summary}`
+    await confirmAndApplyPatch(
+      this.context,
+      {
+        path: this.filePath,
+        original: proposal.original,
+        proposed: proposal.proposed,
+        summary: proposal.summary,
+        diff: proposal.diff,
+      },
+      this.output,
+      "stage"
     );
-
-    const choice = await vscode.window.showInformationMessage(
-      `Apply layout patch?\n${proposal.summary}`,
-      { modal: true, detail: truncate(proposal.diff, 1200) },
-      "Apply",
-      "Cancel"
-    );
-
-    if (choice === "Apply") {
-      await this.applyPending();
-    } else {
-      this.pending = undefined;
-      await this.refresh();
-    }
-  }
-
-  private async applyPending(): Promise<void> {
-    if (!this.pending) {
-      return;
-    }
-    const uri = vscode.Uri.file(this.pending.path);
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const current = doc.getText();
-    if (current !== this.pending.original) {
-      void vscode.window.showErrorMessage(
-        "Manim Dock: file changed since the patch was proposed. Refresh Stage and try again."
-      );
-      this.pending = undefined;
-      await this.refresh();
-      return;
-    }
-
-    const edit = new vscode.WorkspaceEdit();
-    const start = new vscode.Position(0, 0);
-    const end = doc.lineAt(doc.lineCount - 1).range.end;
-    edit.replace(uri, new vscode.Range(start, end), this.pending.proposed);
-    const ok = await vscode.workspace.applyEdit(edit);
-    if (!ok) {
-      void vscode.window.showErrorMessage("Manim Dock: failed to apply patch edit.");
-      return;
-    }
-    await doc.save();
-    this.output.appendLine(`[stage] applied ${this.pending.summary}`);
-    void vscode.window.showInformationMessage(
-      `Manim Dock: applied ${this.pending.summary}`
-    );
-    this.pending = undefined;
     await this.refresh();
   }
 
@@ -272,12 +203,13 @@ export class StagePanel {
   <title>Manim Dock Stage</title>
   <style>
     html, body { margin: 0; height: 100%; background: #1a1b1e; color: #c8c8c8;
-      font-family: var(--vscode-font-family, system-ui, sans-serif); overflow: hidden; }
-    .bar { display: flex; gap: 12px; align-items: baseline; padding: 8px 12px;
+      font-family: var(--vscode-font-family, system-ui, sans-serif); overflow: hidden;
+      display: flex; flex-direction: column; }
+    .bar { flex: 0 0 auto; display: flex; gap: 12px; align-items: baseline; padding: 8px 12px;
       font-size: 12px; border-bottom: 1px solid #333; flex-wrap: wrap; }
     .bar strong { color: #eee; font-weight: 600; }
     .hint { opacity: 0.7; }
-    #stage-host { width: 100%; height: calc(100% - 40px); }
+    #stage-host { flex: 1 1 auto; width: 100%; min-height: 0; position: relative; overflow: hidden; }
   </style>
 </head>
 <body>
@@ -295,89 +227,143 @@ export class StagePanel {
     let layout = null;
     let proxies = new Map();
 
-    function manimToScreen(x, y, fw, fh, pad, scale) {
-      // Manim: origin center, +y up. Screen: origin top-left, +y down.
-      const sx = pad + (fw / 2 + x) * scale;
-      const sy = pad + (fh / 2 - y) * scale;
-      return { x: sx, y: sy };
-    }
-
-    function screenDeltaToManim(dx, dy, scale) {
-      return { dx: dx / scale, dy: -dy / scale };
-    }
-
     function rebuild() {
       if (!layout) return;
       const fw = layout.frame_width || 14.222;
       const fh = layout.frame_height || 8;
-      const w = host.clientWidth || 640;
-      const h = host.clientHeight || 360;
-      const pad = 24;
-      const scale = Math.min((w - pad * 2) / fw, (h - pad * 2) / fh);
+      const w = Math.max(1, host.clientWidth || 640);
+      const h = Math.max(1, host.clientHeight || 360);
+      const hostPad = 12;
+      const items = layout.items || [];
+
+      // Logical Manim frame (fixed 16:9 workspace). Everything is built here, then
+      // the whole world is uniformly scaled to fit the host — no clipping.
+      const logicalW = 1280;
+      const logicalH = logicalW * (fh / fw);
+      const halfW = 56;
+      const halfH = 22;
+      const fontSize = 12;
+
+      // Domain covers the Manim frame and every item; mapped into the INNER
+      // rect so a full chip at either extreme still lies inside the frame.
+      let minMX = -fw / 2;
+      let maxMX = fw / 2;
+      let minMY = -fh / 2;
+      let maxMY = fh / 2;
+      for (const item of items) {
+        minMX = Math.min(minMX, item.x || 0);
+        maxMX = Math.max(maxMX, item.x || 0);
+        minMY = Math.min(minMY, item.y || 0);
+        maxMY = Math.max(maxMY, item.y || 0);
+      }
+      const spanX = Math.max(maxMX - minMX, 1e-6);
+      const spanY = Math.max(maxMY - minMY, 1e-6);
+      const innerW = logicalW - 2 * halfW;
+      const innerH = logicalH - 2 * halfH;
+      const unit = Math.min(innerW / spanX, innerH / spanY);
+      const offX = halfW + (innerW - spanX * unit) / 2;
+      const offY = halfH + (innerH - spanY * unit) / 2;
+
+      function manimToLocal(x, y) {
+        return {
+          x: offX + (x - minMX) * unit,
+          y: offY + (maxMY - y) * unit,
+        };
+      }
 
       if (stage) stage.destroy();
       stage = new Konva.Stage({ container: 'stage-host', width: w, height: h });
       layer = new Konva.Layer();
       stage.add(layer);
 
-      frameRect = new Konva.Rect({
-        x: pad, y: pad, width: fw * scale, height: fh * scale,
-        stroke: '#5a5a5a', strokeWidth: 1, fill: '#111214'
-      });
-      layer.add(frameRect);
+      const world = new Konva.Group();
+      layer.add(world);
 
-      // Axes crosshair
-      const cx = pad + (fw / 2) * scale;
-      const cy = pad + (fh / 2) * scale;
-      layer.add(new Konva.Line({ points: [pad, cy, pad + fw * scale, cy], stroke: '#2a2a2e', strokeWidth: 1 }));
-      layer.add(new Konva.Line({ points: [cx, pad, cx, pad + fh * scale], stroke: '#2a2a2e', strokeWidth: 1 }));
+      frameRect = new Konva.Rect({
+        x: 0, y: 0, width: logicalW, height: logicalH,
+        stroke: '#5a5a5a', strokeWidth: 2, fill: '#111214'
+      });
+      world.add(frameRect);
+
+      const originLocal = manimToLocal(0, 0);
+      world.add(new Konva.Line({
+        points: [0, originLocal.y, logicalW, originLocal.y],
+        stroke: '#2a2a2e', strokeWidth: 1
+      }));
+      world.add(new Konva.Line({
+        points: [originLocal.x, 0, originLocal.x, logicalH],
+        stroke: '#2a2a2e', strokeWidth: 1
+      }));
 
       proxies = new Map();
-      const items = layout.items || [];
       titleEl.textContent = 'Stage: ' + (layout.scene || '') + ' (' + items.length + ' items)';
 
       for (const item of items) {
-        const pos = manimToScreen(item.x || 0, item.y || 0, fw, fh, pad, scale);
+        const pos = manimToLocal(item.x || 0, item.y || 0);
         const group = new Konva.Group({
           x: pos.x, y: pos.y, draggable: !!item.editable,
-          name: item.name
+          name: item.name,
+          dragBoundFunc: (abs) => {
+            // abs is stage-absolute; convert to world-local for clamping.
+            const transform = world.getAbsoluteTransform().copy().invert();
+            const local = transform.point(abs);
+            const clamped = {
+              x: Math.min(logicalW - halfW, Math.max(halfW, local.x)),
+              y: Math.min(logicalH - halfH, Math.max(halfH, local.y)),
+            };
+            return world.getAbsoluteTransform().point(clamped);
+          },
         });
-        const box = new Konva.Rect({
-          x: -48, y: -18, width: 96, height: 36,
+        group.add(new Konva.Rect({
+          x: -halfW, y: -halfH, width: halfW * 2, height: halfH * 2,
           fill: item.editable ? '#2d4a6f' : '#3a3a3a',
           stroke: item.editable ? '#7eb6ff' : '#666',
           strokeWidth: 1, cornerRadius: 4, opacity: 0.92
-        });
-        const label = new Konva.Text({
+        }));
+        group.add(new Konva.Text({
           text: item.name + '\\n' + (item.mobject_kind || ''),
-          fontSize: 11, fill: '#e8e8e8', align: 'center',
-          width: 96, x: -48, y: -14, listening: false
-        });
-        group.add(box);
-        group.add(label);
+          fontSize: fontSize, fill: '#e8e8e8', align: 'center', verticalAlign: 'middle',
+          width: halfW * 2, height: halfH * 2, x: -halfW, y: -halfH, listening: false
+        }));
 
-        let start = { x: 0, y: 0 };
+        let startLocal = { x: 0, y: 0 };
         group.on('dragstart', () => {
-          start = { x: group.x(), y: group.y() };
+          startLocal = { x: group.x(), y: group.y() };
         });
         group.on('dragend', () => {
-          const d = screenDeltaToManim(group.x() - start.x, group.y() - start.y, scale);
+          const dxLocal = group.x() - startLocal.x;
+          const dyLocal = group.y() - startLocal.y;
+          const dx = dxLocal / unit;
+          const dy = -dyLocal / unit;
           vscode.postMessage({
             type: 'dragEnd',
             name: item.name,
-            dx: d.dx,
-            dy: d.dy,
+            dx: dx,
+            dy: dy,
             anchorLine: item.range && item.range.start_line,
-            x: item.x + d.dx,
-            y: item.y + d.dy
+            x: (item.x || 0) + dx,
+            y: (item.y || 0) + dy
           });
         });
         group.on('click', () => {
           vscode.postMessage({ type: 'select', name: item.name });
         });
-        layer.add(group);
+        world.add(group);
         proxies.set(item.name, group);
       }
+
+      // Uniformly scale+center the whole world into the host.
+      layer.batchDraw();
+      const bounds = world.getClientRect({ skipTransform: true });
+      const fit = Math.min(
+        (w - hostPad * 2) / Math.max(bounds.width, 1),
+        (h - hostPad * 2) / Math.max(bounds.height, 1)
+      );
+      world.scale({ x: fit, y: fit });
+      world.position({
+        x: (w - bounds.width * fit) / 2 - bounds.x * fit,
+        y: (h - bounds.height * fit) / 2 - bounds.y * fit,
+      });
       layer.draw();
     }
 
@@ -401,31 +387,4 @@ export class StagePanel {
       this.disposables.pop()?.dispose();
     }
   }
-}
-
-class ProposedPatchProvider implements vscode.TextDocumentContentProvider {
-  static readonly scheme = "manim-dock-proposed";
-  private content = new Map<string, string>();
-  private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
-  readonly onDidChange = this._onDidChange.event;
-
-  set(filePath: string, proposed: string): vscode.Uri {
-    const uri = vscode.Uri.parse(
-      `${ProposedPatchProvider.scheme}:${filePath}?t=${Date.now()}`
-    );
-    this.content.set(uri.toString(), proposed);
-    this._onDidChange.fire(uri);
-    return uri;
-  }
-
-  provideTextDocumentContent(uri: vscode.Uri): string {
-    return this.content.get(uri.toString()) ?? "";
-  }
-}
-
-function truncate(text: string, max: number): string {
-  if (text.length <= max) {
-    return text;
-  }
-  return text.slice(0, max) + "\n…";
 }

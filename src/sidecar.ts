@@ -88,6 +88,40 @@ export interface PatchProposal {
   summary: string;
 }
 
+export interface TimelineEvent {
+  id: string;
+  kind: string;
+  label: string;
+  method: string;
+  range: SourceRange;
+  start: number;
+  duration: number;
+  editable: boolean;
+  duration_source: string;
+  note: string;
+}
+
+export interface SceneTimeline {
+  path: string;
+  scene: string;
+  total_duration: number;
+  events: TimelineEvent[];
+  errors: string[];
+}
+
+export interface TimingPatchProposal {
+  ok: boolean;
+  path: string;
+  kind: string;
+  line: number;
+  duration: number;
+  original: string;
+  proposed: string;
+  diff: string;
+  error: string | null;
+  summary: string;
+}
+
 function sidecarRoots(extensionPath: string): string[] {
   const roots: string[] = [];
   const fromExt = path.join(extensionPath, "python");
@@ -341,6 +375,51 @@ print(json.dumps(propose_shift(
 `.trim();
 }
 
+function timelineInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  sceneName: string,
+  source: string | undefined
+): string {
+  if (source !== undefined) {
+    return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.timeline import parse_scene_timeline
+src = ${JSON.stringify(source)}
+print(json.dumps(parse_scene_timeline(src, ${JSON.stringify(filePath)}, ${JSON.stringify(sceneName)}).to_dict()))
+`.trim();
+  }
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.timeline import parse_file_timeline
+print(json.dumps(parse_file_timeline(${JSON.stringify(filePath)}, ${JSON.stringify(sceneName)}).to_dict()))
+`.trim();
+}
+
+function proposeDurationInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  kind: string,
+  line: number,
+  duration: number,
+  source: string
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.patch_timing import propose_duration
+print(json.dumps(propose_duration(
+    ${JSON.stringify(source)},
+    path=${JSON.stringify(filePath)},
+    kind=${JSON.stringify(kind)},
+    line=${JSON.stringify(line)},
+    duration=${JSON.stringify(duration)},
+).to_dict()))
+`.trim();
+}
+
 export class SidecarClient {
   constructor(private readonly extensionPath: string) {}
 
@@ -461,6 +540,67 @@ export class SidecarClient {
       }
     }
     throw new Error(`propose_shift failed:\n${errors.join("\n")}`);
+  }
+
+  async timeline(
+    filePath: string,
+    sceneName: string,
+    source?: string
+  ): Promise<SceneTimeline> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<SceneTimeline>(bin, [
+            "-c",
+            timelineInlineCode(root, filePath, sceneName, source),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`timeline failed:\n${errors.join("\n")}`);
+  }
+
+  async proposeDuration(
+    filePath: string,
+    kind: string,
+    line: number,
+    duration: number,
+    source: string
+  ): Promise<TimingPatchProposal> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<TimingPatchProposal>(bin, [
+            "-c",
+            proposeDurationInlineCode(
+              root,
+              filePath,
+              kind,
+              line,
+              duration,
+              source
+            ),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`propose_duration failed:\n${errors.join("\n")}`);
   }
 
   async render(

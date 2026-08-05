@@ -66,6 +66,11 @@
         "icon": "$(symbol-misc)"
       },
       {
+        "command": "manimDock.openTimeline",
+        "title": "Manim Dock: Open Timeline",
+        "icon": "$(graph-line)"
+      },
+      {
         "command": "manimDock.debugSidecar",
         "title": "Manim Dock: Debug Sidecar"
       }
@@ -83,6 +88,11 @@
           "group": "navigation"
         },
         {
+          "command": "manimDock.openTimeline",
+          "when": "view == manimDock.outline",
+          "group": "navigation"
+        },
+        {
           "command": "manimDock.renderScene",
           "when": "view == manimDock.outline",
           "group": "navigation"
@@ -95,14 +105,24 @@
           "group": "inline@1"
         },
         {
-          "command": "manimDock.renderScene",
+          "command": "manimDock.openTimeline",
           "when": "view == manimDock.outline && viewItem == manimDock.scene",
           "group": "inline@2"
+        },
+        {
+          "command": "manimDock.renderScene",
+          "when": "view == manimDock.outline && viewItem == manimDock.scene",
+          "group": "inline@3"
         }
       ],
       "editor/title": [
         {
           "command": "manimDock.openStage",
+          "when": "resourceLangId == python",
+          "group": "navigation"
+        },
+        {
+          "command": "manimDock.openTimeline",
           "when": "resourceLangId == python",
           "group": "navigation"
         },
