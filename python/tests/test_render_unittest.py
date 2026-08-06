@@ -45,6 +45,17 @@ class RenderHelperTests(unittest.TestCase):
         self.assertIn("-ql", result.command)
         self.assertIn("MinimalLesson", result.command)
 
+    def test_render_includes_save_sections_flag(self) -> None:
+        fake = Path(__file__).resolve()
+        completed = mock.Mock(
+            returncode=0,
+            stdout="File ready at '/tmp/MinimalLesson.mp4'\n",
+            stderr="",
+        )
+        with mock.patch("manim_dock.render.subprocess.run", return_value=completed):
+            result = render_scene(fake, "MinimalLesson", save_sections=True)
+        self.assertIn("--save_sections", result.command)
+
 
 if __name__ == "__main__":
     unittest.main()

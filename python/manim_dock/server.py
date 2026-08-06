@@ -16,8 +16,12 @@ from manim_dock.doctor import run_doctor
 from manim_dock.extract import propose_extract_method_files
 from manim_dock.layout import parse_file_layout
 from manim_dock.outline import parse_file
-from manim_dock.patch_layout import propose_shift_file
-from manim_dock.patch_timing import propose_duration_file
+from manim_dock.patch_layout import (
+    propose_buff_file,
+    propose_scale_file,
+    propose_shift_file,
+)
+from manim_dock.patch_timing import propose_duration_file, propose_reorder_file
 from manim_dock.render import render_scene
 from manim_dock.timeline import parse_file_timeline
 
@@ -95,6 +99,67 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         return propose_duration_file(
             str(path), str(kind), int(line), duration
         ).to_dict()
+    if method == "propose_buff":
+        path = params.get("path")
+        name = params.get("name")
+        if not path or not name:
+            raise ValueError("params.path and params.name are required")
+        if params.get("buff") is None:
+            raise ValueError("params.buff is required")
+        buff = float(params.get("buff"))
+        anchor = params.get("anchor_line")
+        anchor_line = int(anchor) if anchor is not None else None
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_layout import propose_buff
+
+            return propose_buff(
+                source,
+                path=str(path),
+                name=str(name),
+                buff=buff,
+                anchor_line=anchor_line,
+            ).to_dict()
+        return propose_buff_file(str(path), str(name), buff, anchor_line).to_dict()
+    if method == "propose_scale":
+        path = params.get("path")
+        name = params.get("name")
+        if not path or not name:
+            raise ValueError("params.path and params.name are required")
+        if params.get("factor") is None:
+            raise ValueError("params.factor is required")
+        factor = float(params.get("factor"))
+        anchor = params.get("anchor_line")
+        anchor_line = int(anchor) if anchor is not None else None
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_layout import propose_scale
+
+            return propose_scale(
+                source,
+                path=str(path),
+                name=str(name),
+                factor=factor,
+                anchor_line=anchor_line,
+            ).to_dict()
+        return propose_scale_file(str(path), str(name), factor, anchor_line).to_dict()
+    if method == "propose_reorder":
+        path = params.get("path")
+        line_a = params.get("line_a")
+        line_b = params.get("line_b")
+        if not path or line_a is None or line_b is None:
+            raise ValueError("params.path, params.line_a, and params.line_b are required")
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_timing import propose_reorder
+
+            return propose_reorder(
+                source,
+                path=str(path),
+                line_a=int(line_a),
+                line_b=int(line_b),
+            ).to_dict()
+        return propose_reorder_file(str(path), int(line_a), int(line_b)).to_dict()
     if method == "extract_method":
         path = params.get("path")
         scene = params.get("scene")
@@ -128,7 +193,16 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         if not path or not scene:
             raise ValueError("params.path and params.scene are required")
         quality = params.get("quality") or "l"
-        return render_scene(path, scene, quality=str(quality)).to_dict()
+        save_sections = bool(params.get("save_sections") or False)
+        skip_until = params.get("skip_until_section")
+        skip_until_section = str(skip_until) if skip_until else None
+        return render_scene(
+            path,
+            scene,
+            quality=str(quality),
+            save_sections=save_sections,
+            skip_until_section=skip_until_section,
+        ).to_dict()
     if method == "doctor":
         return {"probes": [p.to_dict() for p in run_doctor()]}
     raise ValueError(f"unknown method: {method}")

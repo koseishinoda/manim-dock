@@ -61,6 +61,16 @@
         "icon": "$(play)"
       },
       {
+        "command": "manimDock.renderWithSections",
+        "title": "Manim Dock: Render with Sections",
+        "icon": "$(versions)"
+      },
+      {
+        "command": "manimDock.renderSkipToSection",
+        "title": "Manim Dock: Render Skip to Section",
+        "icon": "$(debug-step-over)"
+      },
+      {
         "command": "manimDock.openStage",
         "title": "Manim Dock: Open Stage",
         "icon": "$(symbol-misc)"
@@ -69,6 +79,20 @@
         "command": "manimDock.openTimeline",
         "title": "Manim Dock: Open Timeline",
         "icon": "$(graph-line)"
+      },
+      {
+        "command": "manimDock.openProperties",
+        "title": "Manim Dock: Open Properties",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "manimDock.insertTemplate",
+        "title": "Manim Dock: Insert Template",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "manimDock.scaffoldExample",
+        "title": "Manim Dock: Scaffold Minimal Lesson"
       },
       {
         "command": "manimDock.extractMethod",
@@ -98,9 +122,29 @@
           "group": "navigation"
         },
         {
+          "command": "manimDock.openProperties",
+          "when": "view == manimDock.outline",
+          "group": "navigation"
+        },
+        {
           "command": "manimDock.renderScene",
           "when": "view == manimDock.outline",
           "group": "navigation"
+        },
+        {
+          "command": "manimDock.renderWithSections",
+          "when": "view == manimDock.outline",
+          "group": "1_render"
+        },
+        {
+          "command": "manimDock.renderSkipToSection",
+          "when": "view == manimDock.outline",
+          "group": "1_render"
+        },
+        {
+          "command": "manimDock.insertTemplate",
+          "when": "view == manimDock.outline",
+          "group": "2_templates"
         }
       ],
       "view/item/context": [
@@ -115,9 +159,24 @@
           "group": "inline@2"
         },
         {
-          "command": "manimDock.renderScene",
+          "command": "manimDock.openProperties",
           "when": "view == manimDock.outline && viewItem == manimDock.scene",
           "group": "inline@3"
+        },
+        {
+          "command": "manimDock.renderScene",
+          "when": "view == manimDock.outline && viewItem == manimDock.scene",
+          "group": "inline@4"
+        },
+        {
+          "command": "manimDock.renderWithSections",
+          "when": "view == manimDock.outline && viewItem == manimDock.scene",
+          "group": "1_render"
+        },
+        {
+          "command": "manimDock.renderSkipToSection",
+          "when": "view == manimDock.outline && viewItem == manimDock.scene",
+          "group": "1_render"
         },
         {
           "command": "manimDock.extractMethod",
@@ -137,9 +196,24 @@
           "group": "navigation"
         },
         {
+          "command": "manimDock.openProperties",
+          "when": "resourceLangId == python",
+          "group": "navigation"
+        },
+        {
           "command": "manimDock.renderScene",
           "when": "resourceLangId == python",
           "group": "navigation"
+        },
+        {
+          "command": "manimDock.insertTemplate",
+          "when": "resourceLangId == python",
+          "group": "1_manimDock"
+        },
+        {
+          "command": "manimDock.renderWithSections",
+          "when": "resourceLangId == python",
+          "group": "1_manimDock"
         }
       ]
     },

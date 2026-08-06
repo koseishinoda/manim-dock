@@ -2,6 +2,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { revealRange } from "./outlineTree";
 import { ProposedPatchProvider, confirmAndApplyPatch } from "./patchConfirm";
+import { PropertiesPanel } from "./propertiesPanel";
 import { SceneLayout, SidecarClient } from "./sidecar";
 
 /**
@@ -97,6 +98,23 @@ export class StagePanel {
     void cur.panel.webview.postMessage({ type: "highlightLine", line });
   }
 
+  /** Scrub approximate visibility: dim proxies defined after activeUntilLine. */
+  static scrub(
+    filePath: string,
+    time: number,
+    activeUntilLine?: number
+  ): void {
+    const cur = StagePanel.current;
+    if (!cur?.filePath || cur.filePath !== filePath) {
+      return;
+    }
+    void cur.panel.webview.postMessage({
+      type: "scrub",
+      time,
+      activeUntilLine,
+    });
+  }
+
   async refresh(): Promise<void> {
     if (!this.filePath || !this.sceneName) {
       return;
@@ -118,6 +136,17 @@ export class StagePanel {
     }
   }
 
+  private static hasBuffHint(item: {
+    layout_calls: { kind: string; code: string }[];
+  }): boolean {
+    return item.layout_calls.some(
+      (c) =>
+        c.kind === "arrange" ||
+        c.kind === "next_to" ||
+        /buff\s*=/.test(c.code)
+    );
+  }
+
   private async onMessage(msg: unknown): Promise<void> {
     if (!msg || typeof msg !== "object") {
       return;
@@ -137,6 +166,12 @@ export class StagePanel {
       const item = this.layout?.items.find((i) => i.name === name);
       if (item && this.filePath) {
         await revealRange(this.filePath, item.range);
+        PropertiesPanel.setSelection(this.filePath, {
+          kind: "mobject",
+          name: item.name,
+          anchorLine: item.range.start_line,
+          hasBuffHint: StagePanel.hasBuffHint(item),
+        });
       }
       return;
     }
@@ -246,6 +281,8 @@ export class StagePanel {
     let layout = null;
     let proxies = new Map();
     let pendingHighlightLine = null;
+    let scrubTime = null;
+    let scrubUntilLine = null;
 
     function rebuild() {
       if (!layout) return;
@@ -316,7 +353,7 @@ export class StagePanel {
       }));
 
       proxies = new Map();
-      titleEl.textContent = 'Stage: ' + (layout.scene || '') + ' (' + items.length + ' items)';
+      updateTitle(items.length);
 
       for (const item of items) {
         const pos = manimToLocal(item.x || 0, item.y || 0);
@@ -388,9 +425,32 @@ export class StagePanel {
         x: (w - bounds.width * fit) / 2 - bounds.x * fit,
         y: (h - bounds.height * fit) / 2 - bounds.y * fit,
       });
+      applyScrubOpacity();
       layer.draw();
       if (pendingHighlightLine != null) {
         highlightLine(pendingHighlightLine);
+      }
+    }
+
+    function updateTitle(itemCount) {
+      let text = 'Stage: ' + (layout && layout.scene || '') + ' (' + itemCount + ' items)';
+      if (scrubTime != null) {
+        text += ' · scrub t=' + (Math.round(scrubTime * 100) / 100) + 's';
+      }
+      titleEl.textContent = text;
+    }
+
+    function applyScrubOpacity() {
+      for (const [, group] of proxies) {
+        const start = group.getAttr('startLine') || 0;
+        let opacity = 1;
+        if (scrubUntilLine != null && start > scrubUntilLine) {
+          opacity = 0.35;
+        }
+        group.opacity(opacity);
+      }
+      if (layout) {
+        updateTitle((layout.items || []).length);
       }
     }
 
@@ -434,6 +494,11 @@ export class StagePanel {
         rebuild();
       } else if (msg && msg.type === 'highlightLine') {
         highlightLine(msg.line);
+      } else if (msg && msg.type === 'scrub') {
+        scrubTime = typeof msg.time === 'number' ? msg.time : null;
+        scrubUntilLine = typeof msg.activeUntilLine === 'number' ? msg.activeUntilLine : null;
+        applyScrubOpacity();
+        if (layer) layer.draw();
       }
     });
     window.addEventListener('resize', () => rebuild());

@@ -8,13 +8,17 @@ It docks Outline, Stage, and Timeline tools beside your normal Manim Python — 
 
 ## Status
 
-Phase 0–5: Outline, Doctor, QL preview, Stage, Timeline, library extract, and editor↔Stage/Timeline selection sync.
+**V1 (`v0.0.1`):** Outline, Doctor, QL + section-aware render, Stage, Timeline (pace/reorder/scrub), Properties (shift/buff/scale/duration), library extract, templates/snippets, editor↔surface sync. Plan: [docs/v1-architecture-plan.md](docs/v1-architecture-plan.md).
 
-Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains optional for a richer player.
+Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains optional for a richer player — see [docs/sideview.md](docs/sideview.md).
 
 **Try Stage / Timeline:** open `examples/minimal_lesson/lesson.py` → **Open Stage** / **Open Timeline** → drag → confirm-diff → Apply.
 
+**Try templates:** copy from `templates/` (`basic_scene.py`, `multi_section_scene.py`, `multi_scene_project.py`), or `python -m manim_dock.cli scaffold-example DEST`.
+
 **Try library extract (P15):** Outline → right-click a method (e.g. `title_card`) → **Extract Method to Library**, or use `examples/lesson_lib` + `examples/lesson_with_lib/lesson.py` (`PYTHONPATH=examples`).
+
+Architecture plan (in-repo): [docs/v1-architecture-plan.md](docs/v1-architecture-plan.md).
 
 ## Product pillars
 
@@ -37,8 +41,9 @@ Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains 
 ├── media/                # Extension icons + vendored Konva
 ├── python/               # Sidecar: outline, layout, patches, doctor, render
 ├── examples/             # Sample ManimCE lessons
+├── templates/            # File templates (basic / multi-section / multi-scene)
 ├── snippets/             # Educational snippet stubs
-├── docs/                 # Architecture & product law
+├── docs/                 # Architecture, V1 plan, Sideview coexistence
 └── .cursor/              # Project agents & rules
 ```
 

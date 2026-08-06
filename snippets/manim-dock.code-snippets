@@ -76,5 +76,44 @@
       "$0"
     ],
     "description": "P15 — call plain lesson_lib helper (PYTHONPATH=examples)"
+  },
+  "Manim Dock: Two-column layout": {
+    "prefix": "md-cols",
+    "body": [
+      "left = VGroup(",
+      "    ${1:Circle(radius=0.8)},",
+      "    Text(\"${2:label}\", font_size=24),",
+      ").arrange(DOWN, buff=0.2)",
+      "right = VGroup(",
+      "    Text(\"${3:Explanation}\", font_size=28),",
+      "    ${4:MathTex(\"a^2 + b^2 = c^2\")},",
+      ").arrange(DOWN, buff=0.3, aligned_edge=LEFT)",
+      "columns = VGroup(left, right).arrange(RIGHT, buff=${5:1.2})",
+      "columns.move_to(ORIGIN)",
+      "self.play(FadeIn(columns))",
+      "self.wait(${6:0.5})",
+      "$0"
+    ],
+    "description": "P06 — two-column diagram | explanation"
+  },
+  "Manim Dock: Cleanup fade": {
+    "prefix": "md-cleanup",
+    "body": [
+      "leftovers = Group(*self.mobjects)",
+      "if len(leftovers):",
+      "    self.play(FadeOut(leftovers))",
+      "self.wait(${1:0.2})",
+      "$0"
+    ],
+    "description": "P11 — fade out survivors / progressive cleanup"
+  },
+  "Manim Dock: Color and timing constants": {
+    "prefix": "md-consts",
+    "body": [
+      "PRIMARY = ${1:BLUE}",
+      "DEFAULT_WAIT = ${2:0.5}",
+      "$0"
+    ],
+    "description": "Shared color/timing tokens (PRIMARY, DEFAULT_WAIT)"
   }
 }

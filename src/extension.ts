@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
@@ -8,7 +9,8 @@ import {
 } from "./outlineTree";
 import { ProposedPatchProvider } from "./patchConfirm";
 import { PreviewPanel } from "./previewPanel";
-import { SidecarClient, SourceRange } from "./sidecar";
+import { PropertiesPanel } from "./propertiesPanel";
+import { RenderOptions, SidecarClient, SourceRange } from "./sidecar";
 import { StagePanel } from "./stagePanel";
 import { TimelinePanel } from "./timelinePanel";
 
@@ -71,6 +73,26 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     ),
     vscode.commands.registerCommand(
+      "manimDock.renderWithSections",
+      async (item?: unknown) => {
+        await renderSceneCommand(sidecar, outlineProvider, output, item, {
+          saveSections: true,
+          titleSuffix: " (sections)",
+        });
+      }
+    ),
+    vscode.commands.registerCommand(
+      "manimDock.renderSkipToSection",
+      async (item?: unknown) => {
+        await renderSkipToSectionCommand(
+          sidecar,
+          outlineProvider,
+          output,
+          item
+        );
+      }
+    ),
+    vscode.commands.registerCommand(
       "manimDock.openStage",
       async (item?: unknown) => {
         await openStageCommand(context, sidecar, outlineProvider, output, item);
@@ -82,6 +104,24 @@ export function activate(context: vscode.ExtensionContext): void {
         await openTimelineCommand(context, sidecar, outlineProvider, output, item);
       }
     ),
+    vscode.commands.registerCommand(
+      "manimDock.openProperties",
+      async (item?: unknown) => {
+        await openPropertiesCommand(
+          context,
+          sidecar,
+          outlineProvider,
+          output,
+          item
+        );
+      }
+    ),
+    vscode.commands.registerCommand("manimDock.insertTemplate", async () => {
+      await insertTemplateCommand(context);
+    }),
+    vscode.commands.registerCommand("manimDock.scaffoldExample", async () => {
+      await scaffoldExampleCommand(context, output);
+    }),
     vscode.commands.registerCommand(
       "manimDock.extractMethod",
       async (item?: unknown) => {
@@ -110,6 +150,7 @@ export function activate(context: vscode.ExtensionContext): void {
         outlineProvider.refresh();
         StagePanel.refreshIfOpen(doc.uri.fsPath);
         TimelinePanel.refreshIfOpen(doc.uri.fsPath);
+        PropertiesPanel.refreshIfOpen(doc.uri.fsPath);
       }
     })
   );
@@ -195,6 +236,134 @@ async function openTimelineCommand(
     target.filePath,
     target.sceneName
   );
+}
+
+async function openPropertiesCommand(
+  context: vscode.ExtensionContext,
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<void> {
+  const target = await resolveSceneTarget(outlineProvider, output, item);
+  if (!target) {
+    return;
+  }
+  output.appendLine(
+    `\n=== Properties ${target.sceneName} (${target.filePath}) ===`
+  );
+  await PropertiesPanel.open(
+    context,
+    sidecar,
+    output,
+    target.filePath,
+    target.sceneName
+  );
+}
+
+async function insertTemplateCommand(
+  context: vscode.ExtensionContext
+): Promise<void> {
+  const templatesDir = path.join(context.extensionPath, "templates");
+  const choices = [
+    { label: "basic_scene", description: "Single Scene construct skeleton" },
+    {
+      label: "multi_section_scene",
+      description: "Scene with next_section beats",
+    },
+    {
+      label: "multi_scene_project",
+      description: "Multiple Scene classes in one file",
+    },
+  ];
+  const picked = await vscode.window.showQuickPick(choices, {
+    placeHolder: "Insert Manim Dock template",
+  });
+  if (!picked) {
+    return;
+  }
+  const filePath = path.join(templatesDir, `${picked.label}.py`);
+  if (!fs.existsSync(filePath)) {
+    void vscode.window.showErrorMessage(
+      `Manim Dock: template not found: ${filePath}`
+    );
+    return;
+  }
+  const content = fs.readFileSync(filePath, "utf8");
+  const doc = await vscode.workspace.openTextDocument({
+    content,
+    language: "python",
+  });
+  await vscode.window.showTextDocument(doc);
+}
+
+async function scaffoldExampleCommand(
+  context: vscode.ExtensionContext,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const lessonSrc = path.join(
+    context.extensionPath,
+    "examples",
+    "minimal_lesson"
+  );
+  if (!fs.existsSync(path.join(lessonSrc, "lesson.py"))) {
+    void vscode.window.showErrorMessage(
+      `Manim Dock: examples/minimal_lesson not found under ${context.extensionPath}`
+    );
+    return;
+  }
+
+  let destDir: string | undefined;
+  const folders = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Scaffold into folder",
+    title: "Choose destination for minimal_lesson",
+  });
+  if (folders?.[0]) {
+    destDir = folders[0].fsPath;
+  } else if (vscode.workspace.workspaceFolders?.[0]) {
+    destDir = path.join(
+      vscode.workspace.workspaceFolders[0].uri.fsPath,
+      "minimal_lesson"
+    );
+  }
+  if (!destDir) {
+    void vscode.window.showWarningMessage(
+      "Manim Dock: no destination folder selected."
+    );
+    return;
+  }
+
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const name of ["lesson.py", "README.md"]) {
+    const src = path.join(lessonSrc, name);
+    if (!fs.existsSync(src)) {
+      continue;
+    }
+    const dest = path.join(destDir, name);
+    if (fs.existsSync(dest)) {
+      const overwrite = await vscode.window.showWarningMessage(
+        `${name} already exists in ${destDir}. Overwrite?`,
+        "Overwrite",
+        "Skip"
+      );
+      if (overwrite !== "Overwrite") {
+        continue;
+      }
+    }
+    fs.copyFileSync(src, dest);
+  }
+  output.appendLine(`[scaffold] copied minimal_lesson → ${destDir}`);
+  void vscode.window.showInformationMessage(
+    `Manim Dock: scaffolded example into ${destDir}`
+  );
+  const lessonPath = path.join(destDir, "lesson.py");
+  if (fs.existsSync(lessonPath)) {
+    const doc = await vscode.workspace.openTextDocument(lessonPath);
+    await vscode.window.showTextDocument(doc);
+  }
 }
 
 async function extractMethodCommand(
@@ -367,11 +536,60 @@ async function fileExists(uri: vscode.Uri): Promise<boolean> {
   }
 }
 
-async function renderSceneCommand(
+async function renderSkipToSectionCommand(
   sidecar: SidecarClient,
   outlineProvider: OutlineProvider,
   output: vscode.OutputChannel,
   item?: unknown
+): Promise<void> {
+  const target = await resolveSceneTarget(outlineProvider, output, item);
+  if (!target) {
+    return;
+  }
+  const resolved = await outlineProvider.resolvePythonOutline();
+  if ("error" in resolved) {
+    void vscode.window.showErrorMessage(`Manim Dock: ${resolved.error}`);
+    return;
+  }
+  const scene = resolved.outline.scenes.find((s) => s.name === target.sceneName);
+  const sections: string[] = [];
+  for (const method of scene?.methods ?? []) {
+    for (const ev of method.events) {
+      if (ev.kind === "next_section" && ev.label) {
+        sections.push(ev.label);
+      }
+    }
+  }
+  if (!sections.length) {
+    void vscode.window.showWarningMessage(
+      "Manim Dock: no next_section events found in this scene."
+    );
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(sections, {
+    placeHolder: "Skip until section",
+  });
+  if (!picked) {
+    return;
+  }
+  await renderSceneCommand(
+    sidecar,
+    outlineProvider,
+    output,
+    { filePath: target.filePath, scene: { name: target.sceneName } },
+    {
+      skipUntilSection: picked,
+      titleSuffix: ` (skip → ${picked})`,
+    }
+  );
+}
+
+async function renderSceneCommand(
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown,
+  options?: RenderOptions & { titleSuffix?: string }
 ): Promise<void> {
   const target = await resolveSceneTarget(outlineProvider, output, item);
   if (!target) {
@@ -383,20 +601,42 @@ async function renderSceneCommand(
     vscode.workspace.getConfiguration("manimDock").get<string>("renderQuality") ||
     "l";
 
+  const suffix = options?.titleSuffix ?? "";
+  const renderOpts: RenderOptions | undefined =
+    options?.saveSections || options?.skipUntilSection
+      ? {
+          saveSections: options.saveSections,
+          skipUntilSection: options.skipUntilSection,
+        }
+      : undefined;
+
   output.show(true);
-  output.appendLine(`\n=== Render ${sceneName} (${filePath}) quality=${quality} ===`);
+  output.appendLine(
+    `\n=== Render ${sceneName}${suffix} (${filePath}) quality=${quality}` +
+      (renderOpts?.saveSections ? " save_sections" : "") +
+      (renderOpts?.skipUntilSection
+        ? ` skip_until=${renderOpts.skipUntilSection}`
+        : "") +
+      " ==="
+  );
 
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: `Manim Dock: rendering ${sceneName}…`,
+      title: `Manim Dock: rendering ${sceneName}${suffix}…`,
       cancellable: false,
     },
     async () => {
       try {
-        const result = await sidecar.render(filePath, sceneName, quality, (chunk) => {
-          output.append(chunk);
-        });
+        const result = await sidecar.render(
+          filePath,
+          sceneName,
+          quality,
+          (chunk) => {
+            output.append(chunk);
+          },
+          renderOpts
+        );
         if (result.log_tail) {
           output.appendLine("\n--- log tail ---");
           output.appendLine(result.log_tail);
@@ -409,7 +649,7 @@ async function renderSceneCommand(
         }
         PreviewPanel.show(result.output_path, sceneName);
         void vscode.window.showInformationMessage(
-          `Manim Dock: rendered ${sceneName}`
+          `Manim Dock: rendered ${sceneName}${suffix}`
         );
       } catch (err) {
         output.appendLine(String(err));

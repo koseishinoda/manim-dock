@@ -10,9 +10,14 @@ from manim_dock.doctor import run_doctor
 from manim_dock.extract import propose_extract_method_files
 from manim_dock.layout import parse_file_layout
 from manim_dock.outline import parse_file
-from manim_dock.patch_layout import propose_shift_file
-from manim_dock.patch_timing import propose_duration_file
+from manim_dock.patch_layout import (
+    propose_buff_file,
+    propose_scale_file,
+    propose_shift_file,
+)
+from manim_dock.patch_timing import propose_duration_file, propose_reorder_file
 from manim_dock.render import render_scene
+from manim_dock.scaffold import scaffold_example
 from manim_dock.server import serve
 from manim_dock.timeline import parse_file_timeline
 
@@ -52,6 +57,40 @@ def main(argv: list[str] | None = None) -> int:
     dur_p.add_argument("line", type=int, help="1-based line of the self.play/wait call")
     dur_p.add_argument("--duration", type=float, required=True, help="New duration seconds")
 
+    buff_p = sub.add_parser(
+        "propose-buff", help="Propose a buff= patch on arrange/next_to/SurroundingRectangle"
+    )
+    buff_p.add_argument("path", help="Path to a .py scene file")
+    buff_p.add_argument("name", help="Local mobject variable name")
+    buff_p.add_argument("--buff", type=float, required=True, help="New buff value")
+    buff_p.add_argument(
+        "--anchor-line",
+        type=int,
+        default=None,
+        help="1-based line inside the owning function (scopes the patch)",
+    )
+
+    scale_p = sub.add_parser(
+        "propose-scale", help="Propose inserting name.scale(factor) (no write)"
+    )
+    scale_p.add_argument("path", help="Path to a .py scene file")
+    scale_p.add_argument("name", help="Local mobject variable name")
+    scale_p.add_argument("--factor", type=float, required=True, help="Scale factor (>0, ≠1)")
+    scale_p.add_argument(
+        "--anchor-line",
+        type=int,
+        default=None,
+        help="1-based line inside the owning function (scopes the patch)",
+    )
+
+    reorder_p = sub.add_parser(
+        "propose-reorder",
+        help="Propose swapping two adjacent self.play/self.wait statements",
+    )
+    reorder_p.add_argument("path", help="Path to a .py scene file")
+    reorder_p.add_argument("line_a", type=int, help="1-based start line of first statement")
+    reorder_p.add_argument("line_b", type=int, help="1-based start line of second statement")
+
     extract_p = sub.add_parser(
         "extract-method", help="Propose extracting a Scene method to a library module"
     )
@@ -68,6 +107,23 @@ def main(argv: list[str] | None = None) -> int:
         default="l",
         help="Quality letter or name: l/m/h/k (default: l)",
     )
+    render_p.add_argument(
+        "--save-sections",
+        action="store_true",
+        help="Pass --save_sections to manim (chapterized outputs)",
+    )
+    render_p.add_argument(
+        "--skip-until-section",
+        default=None,
+        metavar="NAME",
+        help="Skip animations before this next_section name (temp copy; user file untouched)",
+    )
+
+    scaffold_p = sub.add_parser(
+        "scaffold-example",
+        help="Copy examples/minimal_lesson into DEST",
+    )
+    scaffold_p.add_argument("dest", help="Destination directory")
 
     sub.add_parser("doctor", help="Probe Python / manim / LaTeX / ffmpeg")
     sub.add_parser("serve", help="Stdio JSON line protocol for the VS Code host")
@@ -115,6 +171,37 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write("\n")
         return 0 if data.get("ok") else 1
 
+    if args.command == "propose-buff":
+        data = propose_buff_file(
+            args.path, args.name, args.buff, args.anchor_line
+        ).to_dict()
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "propose-scale":
+        data = propose_scale_file(
+            args.path, args.name, args.factor, args.anchor_line
+        ).to_dict()
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "propose-reorder":
+        data = propose_reorder_file(args.path, args.line_a, args.line_b).to_dict()
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
     if args.command == "extract-method":
         data = propose_extract_method_files(
             args.path, args.scene, args.method, args.library
@@ -137,10 +224,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if data.get("ok") else 1
 
     if args.command == "render":
-        result = render_scene(args.path, args.scene, quality=args.quality)
+        result = render_scene(
+            args.path,
+            args.scene,
+            quality=args.quality,
+            save_sections=bool(args.save_sections),
+            skip_until_section=args.skip_until_section,
+        )
         json.dump(result.to_dict(), sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0 if result.ok else 1
+
+    if args.command == "scaffold-example":
+        data = scaffold_example(args.dest)
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
 
     if args.command == "doctor":
         probes = run_doctor()

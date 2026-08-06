@@ -13,7 +13,7 @@ VS Code text editor  +  Manim Dock views (Outline → Stage → Timeline)
    ├─ surgical patches (libcst propose → confirm-diff → apply)
    ├─ method extract → plain library module (P15)
    ├─ doctor probes
-   └─ manim CLI orchestration (QL render)
+   └─ manim CLI orchestration (QL / section-aware render)
          │
          ▼
  User .py  +  manim  +  media/
@@ -26,16 +26,16 @@ VS Code text editor  +  Manim Dock views (Outline → Stage → Timeline)
 - Stage uses Konva; Manim frame convention: height 8, 16:9, origin center, +y up
 - Invest in Stage/Timeline; keep video preview thin
 
-## Phase map
+## Phase map (V1 = `v0.0.1`)
 
 | Phase | Deliverable |
 |-------|-------------|
 | 0 | Scaffold, outline parse, Outline view, doctor stub |
-| 1 | Educational snippets + QL render command + thin preview |
-| 2 | Stage (Konva) + confirm-diff relative `shift` patches |
-| 3 | Timeline pacing edits (`run_time` / `wait`) |
+| 1 | Educational snippets + templates + QL render + thin preview |
+| 2 | Stage (Konva) + Properties + shift/buff/scale confirm-diff |
+| 3 | Timeline pacing + reorder + approximate scrub |
 | 4 | Library extract + harden |
-| 5 | Cross-surface selection sync + extract guards *(landed)* |
+| 5 | Cross-surface selection sync + extract guards |
 
 ## Subagents
 
@@ -43,4 +43,8 @@ Project agents in `.cursor/agents/`: `invasion-guardian`, `creator-ux`, `manim-a
 
 `surface-validator` owns fit-to-frame / overflow regressions and maintains [surface-validator-log.md](../.cursor/agents/surface-validator-log.md).
 
-See also: [version-matrix.md](./version-matrix.md), [invasion-test.md](./invasion-test.md).
+## V1 plan (in-repo)
+
+The full V1 architecture plan lives in-repo at [v1-architecture-plan.md](./v1-architecture-plan.md) — never plan-only in chat. Delivery status and historical phase text are kept there.
+
+See also: [sideview.md](./sideview.md), [version-matrix.md](./version-matrix.md), [invasion-test.md](./invasion-test.md).

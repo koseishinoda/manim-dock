@@ -249,3 +249,208 @@ def propose_duration_file(
     return propose_duration(
         source, path=path, kind=kind, line=line, duration=duration
     )
+
+
+@dataclass
+class ReorderPatchProposal:
+    ok: bool
+    path: str
+    line_a: int
+    line_b: int
+    original: str
+    proposed: str
+    diff: str
+    error: str | None = None
+    summary: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "path": self.path,
+            "line_a": self.line_a,
+            "line_b": self.line_b,
+            "original": self.original,
+            "proposed": self.proposed,
+            "diff": self.diff,
+            "error": self.error,
+            "summary": self.summary,
+        }
+
+
+def _is_play_or_wait_stmt(stmt: cst.CSTNode) -> bool:
+    if not isinstance(stmt, cst.SimpleStatementLine):
+        return False
+    if len(stmt.body) != 1 or not isinstance(stmt.body[0], cst.Expr):
+        return False
+    call = stmt.body[0].value
+    if not isinstance(call, cst.Call):
+        return False
+    return _is_self_attr_call(call, "play") or _is_self_attr_call(call, "wait")
+
+
+def _play_wait_label(stmt: cst.SimpleStatementLine) -> str:
+    call = stmt.body[0].value
+    assert isinstance(call, cst.Call)
+    assert isinstance(call.func, cst.Attribute)
+    return call.func.attr.value
+
+
+class _ReorderPatcher(cst.CSTTransformer):
+    METADATA_DEPENDENCIES = (cst.metadata.PositionProvider,)
+
+    def __init__(self, line_a: int, line_b: int) -> None:
+        self.line_a = line_a
+        self.line_b = line_b
+        self.patched = False
+        self.error: str | None = None
+
+    def _maybe_patch(
+        self,
+        original_node: cst.FunctionDef | cst.AsyncFunctionDef,
+        updated_node: cst.FunctionDef | cst.AsyncFunctionDef,
+    ) -> cst.FunctionDef | cst.AsyncFunctionDef:
+        if self.patched or self.error is not None:
+            return updated_node
+
+        orig_block = original_node.body
+        if not isinstance(orig_block, cst.IndentedBlock):
+            return updated_node
+
+        idx_a: int | None = None
+        idx_b: int | None = None
+        for i, stmt in enumerate(orig_block.body):
+            try:
+                pos = self.get_metadata(cst.metadata.PositionProvider, stmt)
+            except Exception:
+                continue
+            if pos is None:
+                continue
+            if pos.start.line == self.line_a:
+                idx_a = i
+            if pos.start.line == self.line_b:
+                idx_b = i
+
+        if idx_a is None or idx_b is None:
+            return updated_node
+
+        if idx_a == idx_b:
+            self.error = "line_a and line_b refer to the same statement"
+            return updated_node
+
+        if abs(idx_a - idx_b) != 1:
+            self.error = (
+                "play/wait statements are not adjacent "
+                "(intervening logic or non-play/wait between them)"
+            )
+            return updated_node
+
+        upd_block = updated_node.body
+        if not isinstance(upd_block, cst.IndentedBlock):
+            return updated_node
+
+        statements = list(upd_block.body)
+        stmt_a = statements[idx_a]
+        stmt_b = statements[idx_b]
+        if not _is_play_or_wait_stmt(stmt_a) or not _is_play_or_wait_stmt(stmt_b):
+            self.error = (
+                "both lines must be SimpleStatementLine self.play(...) or self.wait(...)"
+            )
+            return updated_node
+
+        statements[idx_a], statements[idx_b] = statements[idx_b], statements[idx_a]
+        self.patched = True
+        assert isinstance(stmt_a, cst.SimpleStatementLine)
+        assert isinstance(stmt_b, cst.SimpleStatementLine)
+        self._label_a = _play_wait_label(stmt_a)
+        self._label_b = _play_wait_label(stmt_b)
+        return updated_node.with_changes(
+            body=upd_block.with_changes(body=statements)
+        )
+
+    def leave_FunctionDef(
+        self, original_node: cst.FunctionDef, updated_node: cst.FunctionDef
+    ) -> cst.FunctionDef:
+        return self._maybe_patch(original_node, updated_node)  # type: ignore[return-value]
+
+    def leave_AsyncFunctionDef(
+        self, original_node: cst.AsyncFunctionDef, updated_node: cst.AsyncFunctionDef
+    ) -> cst.AsyncFunctionDef:
+        return self._maybe_patch(original_node, updated_node)  # type: ignore[return-value]
+
+
+def propose_reorder(
+    source: str,
+    *,
+    path: str,
+    line_a: int,
+    line_b: int,
+) -> ReorderPatchProposal:
+    """Swap two adjacent ``self.play`` / ``self.wait`` statement lines."""
+
+    def _fail(error: str) -> ReorderPatchProposal:
+        return ReorderPatchProposal(
+            ok=False,
+            path=path,
+            line_a=line_a,
+            line_b=line_b,
+            original=source,
+            proposed=source,
+            diff="",
+            error=error,
+        )
+
+    if line_a == line_b:
+        return _fail("line_a and line_b must differ")
+
+    try:
+        module = cst.parse_module(source)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(f"libcst parse failed: {exc}")
+
+    wrapper = cst.metadata.MetadataWrapper(module)
+    patcher = _ReorderPatcher(line_a, line_b)
+    try:
+        new_module = wrapper.visit(patcher)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(f"patch failed: {exc}")
+
+    if patcher.error is not None:
+        return _fail(patcher.error)
+
+    if not patcher.patched:
+        return _fail(
+            f"could not find self.play/wait statements on lines {line_a} and {line_b}"
+        )
+
+    proposed = new_module.code
+    if proposed == source:
+        return _fail("patch produced no textual change")
+
+    diff = "".join(
+        difflib.unified_diff(
+            source.splitlines(keepends=True),
+            proposed.splitlines(keepends=True),
+            fromfile=path,
+            tofile=f"{path} (proposed)",
+        )
+    )
+    label_a = getattr(patcher, "_label_a", "play/wait")
+    label_b = getattr(patcher, "_label_b", "play/wait")
+    summary = f"swap self.{label_a} (L{line_a}) ↔ self.{label_b} (L{line_b})"
+    return ReorderPatchProposal(
+        ok=True,
+        path=path,
+        line_a=line_a,
+        line_b=line_b,
+        original=source,
+        proposed=proposed,
+        diff=diff,
+        summary=summary,
+    )
+
+
+def propose_reorder_file(path: str, line_a: int, line_b: int) -> ReorderPatchProposal:
+    from pathlib import Path
+
+    source = Path(path).read_text(encoding="utf-8")
+    return propose_reorder(source, path=path, line_a=line_a, line_b=line_b)
