@@ -25,7 +25,7 @@ def _run_version(cmd: list[str]) -> tuple[bool, str]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=20,
             check=False,
         )
     except FileNotFoundError:
@@ -37,23 +37,37 @@ def _run_version(cmd: list[str]) -> tuple[bool, str]:
     return proc.returncode == 0, detail
 
 
+def _probe_manim() -> Probe:
+    """Prefer ``python -m manim`` in this interpreter; fall back to PATH script."""
+    module_cmd = [sys.executable, "-m", "manim", "--version"]
+    ok, detail = _run_version(module_cmd)
+    if ok:
+        return Probe("manim", True, f"{detail} ({sys.executable} -m manim)")
+
+    manim_bin = shutil.which("manim")
+    if manim_bin:
+        ok_bin, detail_bin = _run_version([manim_bin, "--version"])
+        if ok_bin:
+            return Probe("manim", True, f"{detail_bin} ({manim_bin})")
+        return Probe(
+            "manim",
+            False,
+            f"manim on PATH failed ({detail_bin}); also: {sys.executable} -m manim → {detail}",
+        )
+
+    return Probe(
+        "manim",
+        False,
+        f"not installed in {sys.executable} — "
+        f"pip install manim  (or set manimDock.pythonPath to a venv that has ManimCE)",
+    )
+
+
 def run_doctor() -> list[Probe]:
     probes: list[Probe] = [
-        Probe("python", True, sys.version.split()[0]),
+        Probe("python", True, f"{sys.version.split()[0]} ({sys.executable})"),
+        _probe_manim(),
     ]
-
-    manim = shutil.which("manim")
-    if manim is None:
-        probes.append(
-            Probe(
-                "manim",
-                False,
-                "manim not on PATH — install ManimCE in the active environment",
-            )
-        )
-    else:
-        ok, detail = _run_version([manim, "--version"])
-        probes.append(Probe("manim", ok, detail if ok else f"{detail} ({manim})"))
 
     latex = shutil.which("latex") or shutil.which("pdflatex") or shutil.which("xelatex")
     probes.append(
@@ -72,5 +86,18 @@ def run_doctor() -> list[Probe]:
             ffmpeg or "ffmpeg not on PATH",
         )
     )
+
+    try:
+        import libcst  # noqa: F401
+
+        probes.append(Probe("libcst", True, getattr(libcst, "__version__", "installed")))
+    except ImportError:
+        probes.append(
+            Probe(
+                "libcst",
+                False,
+                "libcst not installed — Stage/Timeline/extract patches need: pip install libcst",
+            )
+        )
 
     return probes

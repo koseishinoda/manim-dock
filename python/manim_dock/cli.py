@@ -7,6 +7,7 @@ import json
 import sys
 
 from manim_dock.doctor import run_doctor
+from manim_dock.extract import propose_extract_method_files
 from manim_dock.layout import parse_file_layout
 from manim_dock.outline import parse_file
 from manim_dock.patch_layout import propose_shift_file
@@ -50,6 +51,14 @@ def main(argv: list[str] | None = None) -> int:
     dur_p.add_argument("kind", choices=["play", "wait"], help="Event kind")
     dur_p.add_argument("line", type=int, help="1-based line of the self.play/wait call")
     dur_p.add_argument("--duration", type=float, required=True, help="New duration seconds")
+
+    extract_p = sub.add_parser(
+        "extract-method", help="Propose extracting a Scene method to a library module"
+    )
+    extract_p.add_argument("path", help="Path to a .py scene file")
+    extract_p.add_argument("scene", help="Scene class name")
+    extract_p.add_argument("method", help="Method name to extract")
+    extract_p.add_argument("library", help="Target library .py path")
 
     render_p = sub.add_parser("render", help="Render a scene with ManimCE (default -ql)")
     render_p.add_argument("path", help="Path to a .py scene file")
@@ -102,6 +111,27 @@ def main(argv: list[str] | None = None) -> int:
         if data.get("ok"):
             data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
             data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "extract-method":
+        data = propose_extract_method_files(
+            args.path, args.scene, args.method, args.library
+        ).to_dict()
+        if data.get("ok"):
+            data = {
+                k: v
+                for k, v in data.items()
+                if k
+                not in {
+                    "scene_original",
+                    "scene_proposed",
+                    "library_original",
+                    "library_proposed",
+                }
+            }
+            data["sources_omitted"] = True
         json.dump(data, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0 if data.get("ok") else 1

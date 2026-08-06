@@ -8,11 +8,13 @@ It docks Outline, Stage, and Timeline tools beside your normal Manim Python — 
 
 ## Status
 
-Phase 0–3: Outline, Doctor, QL render + thin preview, **Stage** (layout shifts), **Timeline** (`run_time` / `wait` pacing) — both via confirm-diff.
+Phase 0–5: Outline, Doctor, QL preview, Stage, Timeline, library extract, and editor↔Stage/Timeline selection sync.
 
 Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains optional for a richer player.
 
-**Try Stage / Timeline:** open `examples/minimal_lesson/lesson.py` → **Manim Dock: Open Stage** or **Open Timeline** → drag a proxy / bar edge → review the diff → Apply. `wait(DEFAULT_WAIT)` stays code-owned until you use a literal.
+**Try Stage / Timeline:** open `examples/minimal_lesson/lesson.py` → **Open Stage** / **Open Timeline** → drag → confirm-diff → Apply.
+
+**Try library extract (P15):** Outline → right-click a method (e.g. `title_card`) → **Extract Method to Library**, or use `examples/lesson_lib` + `examples/lesson_with_lib/lesson.py` (`PYTHONPATH=examples`).
 
 ## Product pillars
 

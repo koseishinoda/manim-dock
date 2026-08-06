@@ -16,3 +16,5 @@ manim -ql lesson.py MinimalLesson
 In Cursor (with Manim Dock installed/reloaded): open `lesson.py` → command **Manim Dock: Render Scene (QL)**, or click the play icon on the scene in Outline.
 
 No Manim Dock imports — uninstall-safe by construction.
+
+For the library-reuse variant see `../lesson_lib/` and `../lesson_with_lib/lesson.py`.

@@ -67,26 +67,33 @@ export class PreviewPanel {
       background: #1e1e1e;
       color: #ccc;
       font-family: var(--vscode-font-family, sans-serif);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
     .wrap {
       display: flex;
       flex-direction: column;
-      height: 100%;
+      flex: 1 1 auto;
+      min-height: 0;
       box-sizing: border-box;
       padding: 12px;
       gap: 8px;
     }
     .meta {
+      flex: 0 0 auto;
       font-size: 12px;
       opacity: 0.8;
       word-break: break-all;
     }
     video {
+      flex: 1 1 auto;
+      min-height: 0;
       width: 100%;
-      max-height: calc(100% - 40px);
       background: #000;
     }
     .hint {
+      flex: 0 0 auto;
       font-size: 11px;
       opacity: 0.65;
     }

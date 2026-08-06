@@ -11,6 +11,7 @@ python -m manim_dock.cli layout path/to/scene.py SceneName
 python -m manim_dock.cli propose-shift path/to/scene.py title --dx 0.5 --dy -0.2
 python -m manim_dock.cli timeline path/to/scene.py SceneName
 python -m manim_dock.cli propose-duration path/to/scene.py play 47 --duration 1.5
+python -m manim_dock.cli extract-method path/to/scene.py SceneName method_name path/to/lib.py
 python -m manim_dock.cli render path/to/scene.py SceneName --quality l
 python -m manim_dock.cli doctor
 ```
@@ -20,4 +21,5 @@ python -m manim_dock.cli doctor
 - Outline / layout / timeline read: stdlib `ast` (no Manim import)
 - Patches: `libcst` propose-only; prefer relative `shift` / axis vectors (G4)
 - Timing: edit literal `run_time=` / `wait(n)`; module constants stay code-owned
+- Extract: Scene method → plain library `def foo(scene): …` (no Dock APIs)
 - Layout positions are heuristics for the Stage canvas — never project truth

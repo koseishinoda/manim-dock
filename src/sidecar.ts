@@ -122,6 +122,22 @@ export interface TimingPatchProposal {
   summary: string;
 }
 
+export interface ExtractProposal {
+  ok: boolean;
+  scene_path: string;
+  library_path: string;
+  method: string;
+  scene_original: string;
+  scene_proposed: string;
+  scene_diff: string;
+  library_original: string;
+  library_proposed: string;
+  library_diff: string;
+  import_name: string;
+  error: string | null;
+  summary: string;
+}
+
 function sidecarRoots(extensionPath: string): string[] {
   const roots: string[] = [];
   const fromExt = path.join(extensionPath, "python");
@@ -420,6 +436,30 @@ print(json.dumps(propose_duration(
 `.trim();
 }
 
+function extractMethodInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  sceneName: string,
+  methodName: string,
+  libraryPath: string,
+  source: string,
+  librarySource: string | null
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.extract import propose_extract_method
+print(json.dumps(propose_extract_method(
+    ${JSON.stringify(source)},
+    scene_path=${JSON.stringify(filePath)},
+    scene_name=${JSON.stringify(sceneName)},
+    method_name=${JSON.stringify(methodName)},
+    library_path=${JSON.stringify(libraryPath)},
+    library_source=${librarySource === null ? "None" : JSON.stringify(librarySource)},
+).to_dict()))
+`.trim();
+}
+
 export class SidecarClient {
   constructor(private readonly extensionPath: string) {}
 
@@ -601,6 +641,43 @@ export class SidecarClient {
       }
     }
     throw new Error(`propose_duration failed:\n${errors.join("\n")}`);
+  }
+
+  async extractMethod(
+    filePath: string,
+    sceneName: string,
+    methodName: string,
+    libraryPath: string,
+    source: string,
+    librarySource: string | null
+  ): Promise<ExtractProposal> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<ExtractProposal>(bin, [
+            "-c",
+            extractMethodInlineCode(
+              root,
+              filePath,
+              sceneName,
+              methodName,
+              libraryPath,
+              source,
+              librarySource
+            ),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`extract_method failed:\n${errors.join("\n")}`);
   }
 
   async render(

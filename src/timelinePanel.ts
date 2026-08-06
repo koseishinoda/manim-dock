@@ -71,6 +71,25 @@ export class TimelinePanel {
     await this.refresh();
   }
 
+  static refreshIfOpen(filePath?: string): void {
+    const cur = TimelinePanel.current;
+    if (!cur?.filePath) {
+      return;
+    }
+    if (filePath && cur.filePath !== filePath) {
+      return;
+    }
+    void cur.refresh();
+  }
+
+  static highlightLine(filePath: string, line: number): void {
+    const cur = TimelinePanel.current;
+    if (!cur?.filePath || cur.filePath !== filePath) {
+      return;
+    }
+    void cur.panel.webview.postMessage({ type: "highlightLine", line });
+  }
+
   async refresh(): Promise<void> {
     if (!this.filePath || !this.sceneName) {
       return;
@@ -218,6 +237,8 @@ export class TimelinePanel {
     .handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
     .dur { text-align: right; opacity: 0.85; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .section-row .label { font-weight: 600; color: #ddd; }
+    .row.active { outline: 1px solid #ffe08a; outline-offset: 2px; border-radius: 2px; }
+    .row.active .label { color: #ffe08a; }
   </style>
 </head>
 <body>
@@ -231,6 +252,7 @@ export class TimelinePanel {
     const rowsEl = document.getElementById('rows');
     const titleEl = document.getElementById('title');
     let timeline = null;
+    let pendingHighlightLine = null;
 
     function fmt(n) {
       return (Math.round(n * 100) / 100).toString();
@@ -247,6 +269,9 @@ export class TimelinePanel {
       for (const ev of events) {
         const row = document.createElement('div');
         row.className = 'row' + (ev.kind === 'next_section' ? ' section-row' : '');
+        row.dataset.startLine = String(ev.range && ev.range.start_line || 0);
+        row.dataset.endLine = String(ev.range && ev.range.end_line || 0);
+        row.dataset.method = ev.method || '';
 
         const label = document.createElement('div');
         label.className = 'label';
@@ -326,6 +351,35 @@ export class TimelinePanel {
         row.appendChild(dur);
         rowsEl.appendChild(row);
       }
+      if (pendingHighlightLine != null) {
+        highlightLine(pendingHighlightLine);
+      }
+    }
+
+    function highlightLine(line) {
+      pendingHighlightLine = line;
+      const rows = rowsEl.querySelectorAll('.row');
+      let best = null;
+      let bestDist = Infinity;
+      rows.forEach((row) => {
+        row.classList.remove('active');
+        const start = Number(row.dataset.startLine || 0);
+        const end = Number(row.dataset.endLine || start);
+        if (line >= start && line <= end) {
+          best = row;
+          bestDist = 0;
+        } else if (bestDist > 0) {
+          const dist = Math.min(Math.abs(line - start), Math.abs(line - end));
+          if (dist < bestDist && dist <= 2) {
+            best = row;
+            bestDist = dist;
+          }
+        }
+      });
+      if (best) {
+        best.classList.add('active');
+        best.scrollIntoView({ block: 'nearest' });
+      }
     }
 
     window.addEventListener('message', (event) => {
@@ -333,6 +387,8 @@ export class TimelinePanel {
       if (msg && msg.type === 'timeline') {
         timeline = msg.timeline;
         rebuild();
+      } else if (msg && msg.type === 'highlightLine') {
+        highlightLine(msg.line);
       }
     });
     vscode.postMessage({ type: 'ready' });

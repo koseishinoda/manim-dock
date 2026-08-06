@@ -1,13 +1,10 @@
-from pathlib import Path
+from manim_dock.timeline import parse_scene_timeline
 
-from manim_dock.timeline import parse_file_timeline, parse_scene_timeline
-
-ROOT = Path(__file__).resolve().parents[2]
-LESSON = ROOT / "examples" / "minimal_lesson" / "lesson.py"
+from fixtures import LESSON_SOURCE
 
 
 def test_lesson_timeline_expands_helpers():
-    tl = parse_file_timeline(LESSON, "MinimalLesson")
+    tl = parse_scene_timeline(LESSON_SOURCE, "<fixture>", "MinimalLesson")
     assert not tl.errors
     kinds = [e.kind for e in tl.events]
     assert kinds.count("next_section") >= 5
@@ -23,7 +20,7 @@ def test_lesson_timeline_expands_helpers():
 
 
 def test_constant_wait_not_editable():
-    tl = parse_file_timeline(LESSON, "MinimalLesson")
+    tl = parse_scene_timeline(LESSON_SOURCE, "<fixture>", "MinimalLesson")
     waits = [e for e in tl.events if e.kind == "wait" and "DEFAULT_WAIT" in e.label]
     assert waits
     assert all(not w.editable for w in waits)

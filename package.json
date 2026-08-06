@@ -71,6 +71,11 @@
         "icon": "$(graph-line)"
       },
       {
+        "command": "manimDock.extractMethod",
+        "title": "Manim Dock: Extract Method to Library",
+        "icon": "$(export)"
+      },
+      {
         "command": "manimDock.debugSidecar",
         "title": "Manim Dock: Debug Sidecar"
       }
@@ -113,6 +118,11 @@
           "command": "manimDock.renderScene",
           "when": "view == manimDock.outline && viewItem == manimDock.scene",
           "group": "inline@3"
+        },
+        {
+          "command": "manimDock.extractMethod",
+          "when": "view == manimDock.outline && viewItem == manimDock.method",
+          "group": "inline@1"
         }
       ],
       "editor/title": [

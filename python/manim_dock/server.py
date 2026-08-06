@@ -13,6 +13,7 @@ import sys
 from typing import Any
 
 from manim_dock.doctor import run_doctor
+from manim_dock.extract import propose_extract_method_files
 from manim_dock.layout import parse_file_layout
 from manim_dock.outline import parse_file
 from manim_dock.patch_layout import propose_shift_file
@@ -93,6 +94,33 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
             ).to_dict()
         return propose_duration_file(
             str(path), str(kind), int(line), duration
+        ).to_dict()
+    if method == "extract_method":
+        path = params.get("path")
+        scene = params.get("scene")
+        method_name = params.get("method")
+        library_path = params.get("library_path")
+        if not path or not scene or not method_name or not library_path:
+            raise ValueError(
+                "params.path, params.scene, params.method, and params.library_path are required"
+            )
+        source = params.get("source")
+        library_source = params.get("library_source")
+        if isinstance(source, str):
+            from manim_dock.extract import propose_extract_method
+
+            return propose_extract_method(
+                source,
+                scene_path=str(path),
+                scene_name=str(scene),
+                method_name=str(method_name),
+                library_path=str(library_path),
+                library_source=library_source
+                if isinstance(library_source, str)
+                else None,
+            ).to_dict()
+        return propose_extract_method_files(
+            str(path), str(scene), str(method_name), str(library_path)
         ).to_dict()
     if method == "render":
         path = params.get("path")

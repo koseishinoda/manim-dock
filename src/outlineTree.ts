@@ -56,6 +56,7 @@ export class SceneNode extends vscode.TreeItem {
 class MethodNode extends vscode.TreeItem {
   constructor(
     public readonly filePath: string,
+    public readonly sceneName: string,
     public readonly method: OutlineMethod
   ) {
     super(
@@ -114,6 +115,32 @@ export function asSceneTarget(
     typeof rec.scene.name === "string"
   ) {
     return { filePath: rec.filePath, sceneName: rec.scene.name };
+  }
+  return undefined;
+}
+
+export function asMethodTarget(
+  item: unknown
+): { filePath: string; sceneName: string; methodName: string } | undefined {
+  if (!item || typeof item !== "object") {
+    return undefined;
+  }
+  const rec = item as {
+    filePath?: unknown;
+    sceneName?: unknown;
+    method?: { name?: unknown };
+  };
+  if (
+    typeof rec.filePath === "string" &&
+    typeof rec.sceneName === "string" &&
+    rec.method &&
+    typeof rec.method.name === "string"
+  ) {
+    return {
+      filePath: rec.filePath,
+      sceneName: rec.sceneName,
+      methodName: rec.method.name,
+    };
   }
   return undefined;
 }
@@ -245,7 +272,7 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
 
     if (element instanceof SceneNode) {
       return element.scene.methods.map(
-        (method) => new MethodNode(element.filePath, method)
+        (method) => new MethodNode(element.filePath, element.scene.name, method)
       );
     }
 

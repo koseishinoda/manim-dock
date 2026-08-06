@@ -1,12 +1,14 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import {
+  asMethodTarget,
   asSceneTarget,
   OutlineProvider,
   revealRange,
 } from "./outlineTree";
+import { ProposedPatchProvider } from "./patchConfirm";
 import { PreviewPanel } from "./previewPanel";
 import { SidecarClient, SourceRange } from "./sidecar";
-import { ProposedPatchProvider } from "./patchConfirm";
 import { StagePanel } from "./stagePanel";
 import { TimelinePanel } from "./timelinePanel";
 
@@ -80,17 +82,44 @@ export function activate(context: vscode.ExtensionContext): void {
         await openTimelineCommand(context, sidecar, outlineProvider, output, item);
       }
     ),
+    vscode.commands.registerCommand(
+      "manimDock.extractMethod",
+      async (item?: unknown) => {
+        await extractMethodCommand(
+          context,
+          sidecar,
+          outlineProvider,
+          output,
+          item
+        );
+      }
+    ),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor?.document.languageId === "python") {
         outlineProvider.refresh();
+        syncSurfacesToEditor(editor);
+      }
+    }),
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      if (e.textEditor.document.languageId === "python") {
+        syncSurfacesToEditor(e.textEditor);
       }
     }),
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (doc.languageId === "python") {
         outlineProvider.refresh();
+        StagePanel.refreshIfOpen(doc.uri.fsPath);
+        TimelinePanel.refreshIfOpen(doc.uri.fsPath);
       }
     })
   );
+}
+
+function syncSurfacesToEditor(editor: vscode.TextEditor): void {
+  const filePath = editor.document.uri.fsPath;
+  const line = editor.selection.active.line + 1; // 1-based for sidecar ranges
+  StagePanel.highlightLine(filePath, line);
+  TimelinePanel.highlightLine(filePath, line);
 }
 
 async function resolveSceneTarget(
@@ -166,6 +195,176 @@ async function openTimelineCommand(
     target.filePath,
     target.sceneName
   );
+}
+
+async function extractMethodCommand(
+  context: vscode.ExtensionContext,
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<void> {
+  let filePath: string | undefined;
+  let sceneName: string | undefined;
+  let methodName: string | undefined;
+
+  const fromTree = asMethodTarget(item);
+  if (fromTree) {
+    filePath = fromTree.filePath;
+    sceneName = fromTree.sceneName;
+    methodName = fromTree.methodName;
+  } else {
+    const target = await resolveSceneTarget(outlineProvider, output, item);
+    if (!target) {
+      return;
+    }
+    filePath = target.filePath;
+    sceneName = target.sceneName;
+    const resolved = await outlineProvider.resolvePythonOutline();
+    if ("error" in resolved) {
+      return;
+    }
+    const scene = resolved.outline.scenes.find((s) => s.name === sceneName);
+    const methods = (scene?.methods ?? [])
+      .map((m) => m.name)
+      .filter((n) => n !== "construct");
+    if (!methods.length) {
+      void vscode.window.showErrorMessage(
+        "Manim Dock: no extractable methods on this scene."
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(methods, {
+      placeHolder: "Select a method to extract to a library module",
+    });
+    if (!picked) {
+      return;
+    }
+    methodName = picked;
+  }
+
+  if (!filePath || !sceneName || !methodName) {
+    return;
+  }
+
+  const defaultLib = path.join(
+    path.dirname(filePath),
+    "..",
+    "lesson_lib",
+    "extracted.py"
+  );
+  const libUri = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.file(defaultLib),
+    filters: { Python: ["py"] },
+    saveLabel: "Extract to library",
+    title: "Library module for extracted helper",
+  });
+  if (!libUri) {
+    return;
+  }
+
+  const sceneDoc = await vscode.workspace.openTextDocument(filePath);
+  let librarySource: string | null = null;
+  try {
+    const libDoc = await vscode.workspace.openTextDocument(libUri);
+    librarySource = libDoc.getText();
+  } catch {
+    librarySource = null;
+  }
+
+  let proposal;
+  try {
+    proposal = await sidecar.extractMethod(
+      filePath,
+      sceneName,
+      methodName,
+      libUri.fsPath,
+      sceneDoc.getText(),
+      librarySource
+    );
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `Manim Dock extract failed: ${String(err)}`
+    );
+    return;
+  }
+
+  if (!proposal.ok) {
+    void vscode.window.showWarningMessage(
+      `Manim Dock: ${proposal.error ?? "extract failed"}`
+    );
+    return;
+  }
+
+  output.appendLine(`\n=== Extract ${proposal.summary} ===`);
+  output.appendLine(proposal.library_diff);
+  output.appendLine(proposal.scene_diff);
+
+  const choice = await vscode.window.showInformationMessage(
+    `Extract ${methodName} to library?\n${proposal.summary}`,
+    { modal: true, detail: truncate(proposal.library_diff + "\n" + proposal.scene_diff, 1400) },
+    "Apply",
+    "Cancel"
+  );
+  if (choice !== "Apply") {
+    return;
+  }
+
+  // Write library module (create if needed), then apply scene patch.
+  if (!(await fileExists(libUri))) {
+    const create = new vscode.WorkspaceEdit();
+    create.createFile(libUri, { ignoreIfExists: true });
+    await vscode.workspace.applyEdit(create);
+  }
+  await vscode.workspace.fs.writeFile(
+    libUri,
+    Buffer.from(proposal.library_proposed, "utf8")
+  );
+
+  const sceneUri = vscode.Uri.file(filePath);
+  const current = sceneDoc.getText();
+  if (current !== proposal.scene_original) {
+    void vscode.window.showErrorMessage(
+      "Manim Dock: scene changed during extract. Library was written; re-run extract for the scene call."
+    );
+    return;
+  }
+  const sceneEdit = new vscode.WorkspaceEdit();
+  const end = sceneDoc.lineAt(sceneDoc.lineCount - 1).range.end;
+  sceneEdit.replace(
+    sceneUri,
+    new vscode.Range(new vscode.Position(0, 0), end),
+    proposal.scene_proposed
+  );
+  const ok = await vscode.workspace.applyEdit(sceneEdit);
+  if (!ok) {
+    void vscode.window.showErrorMessage(
+      "Manim Dock: library written, but scene edit failed."
+    );
+    return;
+  }
+  await sceneDoc.save();
+  output.appendLine(`[extract] applied ${proposal.summary}`);
+  outlineProvider.refresh();
+  void vscode.window.showInformationMessage(
+    `Manim Dock: extracted ${methodName} → ${libUri.fsPath}`
+  );
+}
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
+  }
+  return text.slice(0, max) + "\n…";
+}
+
+async function fileExists(uri: vscode.Uri): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(uri);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function renderSceneCommand(

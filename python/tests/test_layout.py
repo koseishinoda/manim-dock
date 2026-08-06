@@ -1,13 +1,10 @@
-from pathlib import Path
+from manim_dock.layout import FRAME_HEIGHT, FRAME_WIDTH, parse_scene_layout
 
-from manim_dock.layout import FRAME_HEIGHT, FRAME_WIDTH, parse_file_layout, parse_scene_layout
-
-ROOT = Path(__file__).resolve().parents[2]
-LESSON = ROOT / "examples" / "minimal_lesson" / "lesson.py"
+from fixtures import LESSON_SOURCE
 
 
 def test_lesson_layout_finds_title_and_steps():
-    layout = parse_file_layout(LESSON, "MinimalLesson")
+    layout = parse_scene_layout(LESSON_SOURCE, "<fixture>", "MinimalLesson")
     assert not layout.errors
     names = {i.name for i in layout.items}
     assert "title" in names

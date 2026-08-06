@@ -11,4 +11,4 @@
 | Runtime | ManimCE (not ManimGL) for V1 — verified locally with Manim Community v0.20.1 |
 | Jupyter | Out of V1 scope |
 
-See also: [invasion-test.md](./invasion-test.md), [architecture.md](./architecture.md).
+See also: [invasion-test.md](./invasion-test.md), [architecture.md](./architecture.md), [version-matrix.md](./version-matrix.md).

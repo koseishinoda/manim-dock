@@ -78,6 +78,25 @@ export class StagePanel {
     await this.refresh();
   }
 
+  static refreshIfOpen(filePath?: string): void {
+    const cur = StagePanel.current;
+    if (!cur?.filePath) {
+      return;
+    }
+    if (filePath && cur.filePath !== filePath) {
+      return;
+    }
+    void cur.refresh();
+  }
+
+  static highlightLine(filePath: string, line: number): void {
+    const cur = StagePanel.current;
+    if (!cur?.filePath || cur.filePath !== filePath) {
+      return;
+    }
+    void cur.panel.webview.postMessage({ type: "highlightLine", line });
+  }
+
   async refresh(): Promise<void> {
     if (!this.filePath || !this.sceneName) {
       return;
@@ -226,6 +245,7 @@ export class StagePanel {
     let stage, layer, frameRect;
     let layout = null;
     let proxies = new Map();
+    let pendingHighlightLine = null;
 
     function rebuild() {
       if (!layout) return;
@@ -314,12 +334,16 @@ export class StagePanel {
             return world.getAbsoluteTransform().point(clamped);
           },
         });
-        group.add(new Konva.Rect({
+        group.setAttr('startLine', item.range && item.range.start_line);
+        group.setAttr('endLine', item.range && item.range.end_line);
+        const box = new Konva.Rect({
           x: -halfW, y: -halfH, width: halfW * 2, height: halfH * 2,
           fill: item.editable ? '#2d4a6f' : '#3a3a3a',
           stroke: item.editable ? '#7eb6ff' : '#666',
-          strokeWidth: 1, cornerRadius: 4, opacity: 0.92
-        }));
+          strokeWidth: 1, cornerRadius: 4, opacity: 0.92,
+          name: 'chip'
+        });
+        group.add(box);
         group.add(new Konva.Text({
           text: item.name + '\\n' + (item.mobject_kind || ''),
           fontSize: fontSize, fill: '#e8e8e8', align: 'center', verticalAlign: 'middle',
@@ -365,6 +389,42 @@ export class StagePanel {
         y: (h - bounds.height * fit) / 2 - bounds.y * fit,
       });
       layer.draw();
+      if (pendingHighlightLine != null) {
+        highlightLine(pendingHighlightLine);
+      }
+    }
+
+    function highlightLine(line) {
+      pendingHighlightLine = line;
+      let best = null;
+      let bestDist = Infinity;
+      for (const [, group] of proxies) {
+        const start = group.getAttr('startLine') || 0;
+        const end = group.getAttr('endLine') || start;
+        const box = group.findOne('.chip');
+        if (!box) continue;
+        const editable = box.fill() === '#2d4a6f';
+        box.stroke(editable ? '#7eb6ff' : '#666');
+        box.strokeWidth(1);
+        if (line >= start && line <= end) {
+          best = group;
+          bestDist = 0;
+        } else if (bestDist > 0) {
+          const dist = Math.min(Math.abs(line - start), Math.abs(line - end));
+          if (dist < bestDist && dist <= 3) {
+            best = group;
+            bestDist = dist;
+          }
+        }
+      }
+      if (best) {
+        const box = best.findOne('.chip');
+        if (box) {
+          box.stroke('#ffe08a');
+          box.strokeWidth(3);
+        }
+        layer.draw();
+      }
     }
 
     window.addEventListener('message', (event) => {
@@ -372,6 +432,8 @@ export class StagePanel {
       if (msg && msg.type === 'layout') {
         layout = msg.layout;
         rebuild();
+      } else if (msg && msg.type === 'highlightLine') {
+        highlightLine(msg.line);
       }
     });
     window.addEventListener('resize', () => rebuild());

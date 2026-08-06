@@ -52,5 +52,29 @@
       "$0"
     ],
     "description": "P05 — derivation step via TransformMatchingTex"
+  },
+  "Manim Dock: Definition card": {
+    "prefix": "md-def",
+    "body": [
+      "heading = Text(\"Definition\", color=${1:BLUE}, font_size=36)",
+      "body = Text(\"${2:…}\", font_size=28)",
+      "card = VGroup(heading, body).arrange(DOWN, aligned_edge=LEFT, buff=0.25)",
+      "card.to_edge(UP)",
+      "box = SurroundingRectangle(card, color=${1:BLUE}, buff=0.2)",
+      "group = VGroup(card, box)",
+      "self.play(FadeIn(group, shift=DOWN * 0.2))",
+      "self.wait(${3:0.5})",
+      "$0"
+    ],
+    "description": "P02 — definition card (plain Manim)"
+  },
+  "Manim Dock: lesson_lib title_card": {
+    "prefix": "md-lib-title",
+    "body": [
+      "from lesson_lib import title_card",
+      "title_card(self, \"${1:Hook question?}\")",
+      "$0"
+    ],
+    "description": "P15 — call plain lesson_lib helper (PYTHONPATH=examples)"
   }
 }

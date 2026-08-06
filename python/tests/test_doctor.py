@@ -8,3 +8,4 @@ def test_doctor_includes_core_probes():
     assert "manim" in probes
     assert "latex" in probes
     assert "ffmpeg" in probes
+    assert "libcst" in probes
