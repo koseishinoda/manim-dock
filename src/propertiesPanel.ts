@@ -1,14 +1,22 @@
 import * as vscode from "vscode";
+import { applyAlignPatches } from "./alignApply";
 import { revealRange } from "./outlineTree";
-import { ProposedPatchProvider, confirmAndApplyPatch } from "./patchConfirm";
+import {
+  ProposedPatchProvider,
+  confirmAndApplyPatch,
+} from "./patchConfirm";
 import { SidecarClient, SourceRange } from "./sidecar";
 
 export type PropertiesSelection =
   | {
       kind: "mobject";
       name: string;
+      selectedNames?: string[];
       anchorLine?: number;
       hasBuffHint?: boolean;
+      hasFontHint?: boolean;
+      hasLagHint?: boolean;
+      isOpaque?: boolean;
     }
   | {
       kind: "event";
@@ -17,8 +25,18 @@ export type PropertiesSelection =
       duration: number;
     };
 
+/** Prefer a text-editor column so Properties does not replace Stage. */
+function editorViewColumn(): vscode.ViewColumn {
+  for (const ed of vscode.window.visibleTextEditors) {
+    if (ed.viewColumn != null) {
+      return ed.viewColumn;
+    }
+  }
+  return vscode.ViewColumn.One;
+}
+
 /**
- * Properties webview — shift / scale / buff / duration editors for Stage+Timeline selection.
+ * Properties webview — shift / scale / buff / font / lag / align / duration.
  */
 export class PropertiesPanel {
   public static readonly viewType = "manimDock.properties";
@@ -53,13 +71,16 @@ export class PropertiesPanel {
     sidecar: SidecarClient,
     output: vscode.OutputChannel,
     filePath: string,
-    sceneName: string
+    sceneName: string,
+    options?: { preserveFocus?: boolean }
   ): Promise<PropertiesPanel> {
     ProposedPatchProvider.ensure(context);
-    const column = vscode.ViewColumn.Beside;
+    // Open in the code editor group (not Beside Stage) so Stage stays visible.
+    const column = editorViewColumn();
+    const preserveFocus = options?.preserveFocus ?? false;
 
     if (PropertiesPanel.current) {
-      PropertiesPanel.current.panel.reveal(column);
+      PropertiesPanel.current.panel.reveal(column, preserveFocus);
       await PropertiesPanel.current.load(filePath, sceneName);
       return PropertiesPanel.current;
     }
@@ -67,7 +88,7 @@ export class PropertiesPanel {
     const panel = vscode.window.createWebviewPanel(
       PropertiesPanel.viewType,
       `Properties: ${sceneName}`,
-      column,
+      { viewColumn: column, preserveFocus },
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -100,6 +121,11 @@ export class PropertiesPanel {
     }
     cur.selection = selection;
     cur.pushState();
+  }
+
+  static isOpenFor(filePath: string): boolean {
+    return !!PropertiesPanel.current?.filePath &&
+      PropertiesPanel.current.filePath === filePath;
   }
 
   static refreshIfOpen(filePath?: string): void {
@@ -162,6 +188,18 @@ export class PropertiesPanel {
     }
     if (type === "applyBuff") {
       await this.applyBuff(rec);
+      return;
+    }
+    if (type === "applyFontSize") {
+      await this.applyFontSize(rec);
+      return;
+    }
+    if (type === "applyLagRatio") {
+      await this.applyLagRatio(rec);
+      return;
+    }
+    if (type === "align") {
+      await this.applyAlign(rec);
       return;
     }
     if (type === "applyDuration") {
@@ -244,6 +282,84 @@ export class PropertiesPanel {
       return;
     }
     await this.confirmProposal(proposal, "properties");
+  }
+
+  private async applyFontSize(rec: Record<string, unknown>): Promise<void> {
+    if (!this.filePath || this.selection?.kind !== "mobject") {
+      return;
+    }
+    const fontSize = Number(rec.fontSize ?? NaN);
+    if (!Number.isFinite(fontSize)) {
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument(this.filePath);
+    let proposal;
+    try {
+      proposal = await this.sidecar.proposeFontSize(
+        this.filePath,
+        this.selection.name,
+        fontSize,
+        doc.getText(),
+        this.selection.anchorLine
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `Manim Dock patch failed: ${String(err)}`
+      );
+      return;
+    }
+    await this.confirmProposal(proposal, "properties");
+  }
+
+  private async applyLagRatio(rec: Record<string, unknown>): Promise<void> {
+    if (!this.filePath || this.selection?.kind !== "mobject") {
+      return;
+    }
+    const lagRatio = Number(rec.lagRatio ?? NaN);
+    if (!Number.isFinite(lagRatio)) {
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument(this.filePath);
+    let proposal;
+    try {
+      proposal = await this.sidecar.proposeLagRatio(
+        this.filePath,
+        this.selection.name,
+        lagRatio,
+        doc.getText(),
+        this.selection.anchorLine
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `Manim Dock patch failed: ${String(err)}`
+      );
+      return;
+    }
+    await this.confirmProposal(proposal, "properties");
+  }
+
+  private async applyAlign(rec: Record<string, unknown>): Promise<void> {
+    if (!this.filePath || !this.sceneName || this.selection?.kind !== "mobject") {
+      return;
+    }
+    const mode = String(rec.mode ?? "");
+    const names =
+      this.selection.selectedNames && this.selection.selectedNames.length >= 2
+        ? this.selection.selectedNames
+        : [];
+    const applied = await applyAlignPatches(
+      this.context,
+      this.sidecar,
+      this.output,
+      this.filePath,
+      this.sceneName,
+      names,
+      mode,
+      "properties"
+    );
+    if (applied) {
+      this.pushState();
+    }
   }
 
   private async applyDuration(rec: Record<string, unknown>): Promise<void> {
@@ -345,6 +461,7 @@ export class PropertiesPanel {
       align-items: center; margin-bottom: 8px; }
     .field label { opacity: 0.85; }
     .row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+    .align-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
     input[type="number"] {
       width: 72px; background: #111214; color: #e8e8e8; border: 1px solid #444;
       border-radius: 2px; padding: 4px 6px; font: inherit;
@@ -354,9 +471,14 @@ export class PropertiesPanel {
       border-radius: 2px; padding: 4px 10px; font: inherit; cursor: pointer;
     }
     button.secondary { background: #2a2a2e; border-color: #666; }
+    button.align { padding: 3px 8px; font-size: 11px; }
     button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: 0.45; cursor: default; filter: none; }
     .name { color: #eee; font-weight: 600; margin-bottom: 10px; }
     .muted { opacity: 0.65; font-size: 11px; margin-top: 8px; }
+    .opaque-note { color: #e6c07b; font-size: 11px; margin-bottom: 10px; }
+    .section { margin-top: 14px; padding-top: 10px; border-top: 1px solid #333; }
+    .section-title { font-weight: 600; color: #ddd; margin-bottom: 6px; }
   </style>
 </head>
 <body>
@@ -371,11 +493,35 @@ export class PropertiesPanel {
     const titleEl = document.getElementById('title');
     let state = { scene: '', selection: null };
 
+    const ALIGN_BUTTONS = [
+      { mode: 'left', label: 'Left' },
+      { mode: 'center_x', label: 'Center X' },
+      { mode: 'right', label: 'Right' },
+      { mode: 'top', label: 'Top' },
+      { mode: 'center_y', label: 'Center Y' },
+      { mode: 'bottom', label: 'Bottom' },
+      { mode: 'distribute_x', label: 'Distribute X' },
+      { mode: 'distribute_y', label: 'Distribute Y' },
+    ];
+
     function numVal(id, fallback) {
       const el = document.getElementById(id);
       if (!el) return fallback;
-      const n = Number(el.value);
+      const raw = String(el.value).trim();
+      if (raw === '') return NaN;
+      const n = Number(raw);
       return Number.isFinite(n) ? n : fallback;
+    }
+
+    function wireEmptyDisable(inputId, buttonId) {
+      const input = document.getElementById(inputId);
+      const btn = document.getElementById(buttonId);
+      if (!input || !btn) return;
+      const sync = () => {
+        btn.disabled = String(input.value).trim() === '';
+      };
+      input.addEventListener('input', sync);
+      sync();
     }
 
     function render() {
@@ -387,8 +533,16 @@ export class PropertiesPanel {
       }
       if (sel.kind === 'mobject') {
         const buffDisabled = sel.hasBuffHint ? '' : 'disabled title="No arrange/next_to buff site detected"';
-        bodyEl.innerHTML =
-          '<div class="name">' + escapeHtml(sel.name) + '</div>' +
+        const selectedNames = Array.isArray(sel.selectedNames) ? sel.selectedNames : [sel.name];
+        const multi = selectedNames.length >= 2;
+        const opaque = !!sel.isOpaque;
+        let html =
+          '<div class="name">' + escapeHtml(sel.name) +
+            (multi ? ' <span class="muted">(+ ' + (selectedNames.length - 1) + ' more)</span>' : '') +
+          '</div>' +
+          (opaque
+            ? '<div class="opaque-note">Opaque / plugin proxy — jump to source; layout edits may be limited</div>'
+            : '') +
           '<div class="field"><label>Shift dx</label><input id="dx" type="number" step="0.1" value="0" /></div>' +
           '<div class="field"><label>Shift dy</label><input id="dy" type="number" step="0.1" value="0" /></div>' +
           '<div class="row-actions"><button id="applyShift">Apply shift</button></div>' +
@@ -396,8 +550,25 @@ export class PropertiesPanel {
           '<div class="row-actions"><button id="applyScale">Apply scale</button></div>' +
           '<div class="field" style="margin-top:12px"><label>Buff</label><input id="buff" type="number" step="0.05" value="0.25" ' + buffDisabled + ' /></div>' +
           '<div class="row-actions"><button id="applyBuff" ' + buffDisabled + '>Apply buff</button></div>' +
+          '<div class="field" style="margin-top:12px"><label>Font size</label><input id="fontSize" type="number" step="1" value="36" /></div>' +
+          '<div class="row-actions"><button id="applyFontSize">Apply font size</button></div>' +
+          '<div class="field" style="margin-top:12px"><label>Lag ratio</label><input id="lagRatio" type="number" step="0.05" value="0.5" /></div>' +
+          '<div class="row-actions"><button id="applyLagRatio">Apply lag ratio</button></div>';
+
+        if (multi) {
+          html +=
+            '<div class="section"><div class="section-title">Align / Distribute</div>' +
+            '<div class="align-grid" id="alignGrid"></div></div>';
+        }
+
+        html +=
           '<div class="row-actions" style="margin-top:12px"><button class="secondary" id="jump">Jump to source</button></div>' +
-          (sel.hasBuffHint ? '' : '<div class="muted">Buff needs an arrange/next_to (or SurroundingRectangle) call with buff=</div>');
+          (sel.hasBuffHint ? '' : '<div class="muted">Buff needs an arrange/next_to (or SurroundingRectangle) call with buff=</div>') +
+          (sel.hasFontHint === false ? '<div class="muted">No font_size site detected on this proxy</div>' : '') +
+          (sel.hasLagHint === false ? '<div class="muted">No lag_ratio site detected for this proxy</div>' : '');
+
+        bodyEl.innerHTML = html;
+
         document.getElementById('applyShift').onclick = () => {
           vscode.postMessage({ type: 'applyShift', dx: numVal('dx', 0), dy: numVal('dy', 0) });
         };
@@ -405,12 +576,34 @@ export class PropertiesPanel {
           vscode.postMessage({ type: 'applyScale', factor: numVal('factor', 1) });
         };
         const buffBtn = document.getElementById('applyBuff');
-        if (buffBtn && !sel.hasBuffHint) {
-          // keep disabled
-        } else if (buffBtn) {
+        if (buffBtn && sel.hasBuffHint) {
           buffBtn.onclick = () => {
             vscode.postMessage({ type: 'applyBuff', buff: numVal('buff', 0.25) });
           };
+        }
+        document.getElementById('applyFontSize').onclick = () => {
+          const fontSize = numVal('fontSize', NaN);
+          if (!Number.isFinite(fontSize)) return;
+          vscode.postMessage({ type: 'applyFontSize', fontSize: fontSize });
+        };
+        document.getElementById('applyLagRatio').onclick = () => {
+          const lagRatio = numVal('lagRatio', NaN);
+          if (!Number.isFinite(lagRatio)) return;
+          vscode.postMessage({ type: 'applyLagRatio', lagRatio: lagRatio });
+        };
+        wireEmptyDisable('fontSize', 'applyFontSize');
+        wireEmptyDisable('lagRatio', 'applyLagRatio');
+        if (multi) {
+          const grid = document.getElementById('alignGrid');
+          for (const btn of ALIGN_BUTTONS) {
+            const el = document.createElement('button');
+            el.className = 'align secondary';
+            el.textContent = btn.label;
+            el.onclick = () => {
+              vscode.postMessage({ type: 'align', mode: btn.mode });
+            };
+            grid.appendChild(el);
+          }
         }
         document.getElementById('jump').onclick = () => {
           vscode.postMessage({ type: 'jump' });

@@ -9,15 +9,24 @@ import sys
 from manim_dock.doctor import run_doctor
 from manim_dock.extract import propose_extract_method_files
 from manim_dock.layout import parse_file_layout
+from manim_dock.library_catalog import list_library_helpers
 from manim_dock.outline import parse_file
+from manim_dock.align import compute_align_deltas
 from manim_dock.patch_layout import (
     propose_buff_file,
+    propose_font_size_file,
+    propose_lag_ratio_file,
     propose_scale_file,
     propose_shift_file,
 )
-from manim_dock.patch_timing import propose_duration_file, propose_reorder_file
+from manim_dock.patch_timing import (
+    propose_duration_file,
+    propose_reorder_file,
+    propose_section_reorder_file,
+)
 from manim_dock.render import render_scene
 from manim_dock.scaffold import scaffold_example
+from manim_dock.scrub import scrub_layout
 from manim_dock.server import serve
 from manim_dock.timeline import parse_file_timeline
 
@@ -83,6 +92,70 @@ def main(argv: list[str] | None = None) -> int:
         help="1-based line inside the owning function (scopes the patch)",
     )
 
+    font_p = sub.add_parser(
+        "propose-font-size", help="Propose a font_size= patch on Text/MathTex/..."
+    )
+    font_p.add_argument("path", help="Path to a .py scene file")
+    font_p.add_argument("name", help="Local mobject variable name")
+    font_p.add_argument(
+        "--font-size", type=float, required=True, help="New font_size value"
+    )
+    font_p.add_argument(
+        "--anchor-line",
+        type=int,
+        default=None,
+        help="1-based line inside the owning function (scopes the patch)",
+    )
+
+    lag_p = sub.add_parser(
+        "propose-lag-ratio",
+        help="Propose a lag_ratio= patch on LaggedStart/AnimationGroup",
+    )
+    lag_p.add_argument("path", help="Path to a .py scene file")
+    lag_p.add_argument("name", help="Local mobject variable name referenced by the lag")
+    lag_p.add_argument(
+        "--lag-ratio", type=float, required=True, help="New lag_ratio value"
+    )
+    lag_p.add_argument(
+        "--anchor-line",
+        type=int,
+        default=None,
+        help="1-based line inside the owning function (scopes the patch)",
+    )
+
+    scrub_p = sub.add_parser(
+        "scrub-layout", help="Approximate Stage positions up to a source line"
+    )
+    scrub_p.add_argument("path", help="Path to a .py scene file")
+    scrub_p.add_argument("scene", help="Scene class name")
+    scrub_p.add_argument(
+        "active_until_line",
+        type=int,
+        help="1-based line — include layout calls ending at/before this line",
+    )
+
+    align_p = sub.add_parser(
+        "align-deltas", help="Compute align/distribute dx/dy for Stage items (JSON)"
+    )
+    align_p.add_argument(
+        "mode",
+        choices=[
+            "left",
+            "right",
+            "center_x",
+            "top",
+            "bottom",
+            "center_y",
+            "distribute_x",
+            "distribute_y",
+        ],
+        help="Align or distribute mode",
+    )
+    align_p.add_argument(
+        "items_json",
+        help='JSON list of {"name","x","y"} objects',
+    )
+
     reorder_p = sub.add_parser(
         "propose-reorder",
         help="Propose swapping two adjacent self.play/self.wait statements",
@@ -90,6 +163,18 @@ def main(argv: list[str] | None = None) -> int:
     reorder_p.add_argument("path", help="Path to a .py scene file")
     reorder_p.add_argument("line_a", type=int, help="1-based start line of first statement")
     reorder_p.add_argument("line_b", type=int, help="1-based start line of second statement")
+
+    section_reorder_p = sub.add_parser(
+        "propose-section-reorder",
+        help="Propose swapping two adjacent next_section blocks in construct()",
+    )
+    section_reorder_p.add_argument("path", help="Path to a .py scene file")
+    section_reorder_p.add_argument(
+        "line_a", type=int, help="1-based start line of first next_section"
+    )
+    section_reorder_p.add_argument(
+        "line_b", type=int, help="1-based start line of second next_section"
+    )
 
     extract_p = sub.add_parser(
         "extract-method", help="Propose extracting a Scene method to a library module"
@@ -118,6 +203,18 @@ def main(argv: list[str] | None = None) -> int:
         metavar="NAME",
         help="Skip animations before this next_section name (temp copy; user file untouched)",
     )
+    render_p.add_argument(
+        "--method",
+        default=None,
+        metavar="NAME",
+        help="Render only by rewriting construct to self.NAME() (temp copy; user file untouched)",
+    )
+
+    lib_p = sub.add_parser(
+        "library-catalog",
+        help="List plain helper functions from a library .py for insert snippets",
+    )
+    lib_p.add_argument("path", help="Path to a library .py file")
 
     scaffold_p = sub.add_parser(
         "scaffold-example",
@@ -193,8 +290,63 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write("\n")
         return 0 if data.get("ok") else 1
 
+    if args.command == "propose-font-size":
+        data = propose_font_size_file(
+            args.path, args.name, args.font_size, args.anchor_line
+        ).to_dict()
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "propose-lag-ratio":
+        data = propose_lag_ratio_file(
+            args.path, args.name, args.lag_ratio, args.anchor_line
+        ).to_dict()
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "scrub-layout":
+        data = scrub_layout(args.path, args.scene, args.active_until_line)
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 1 if data.get("errors") else 0
+
+    if args.command == "align-deltas":
+        try:
+            items = json.loads(args.items_json)
+        except json.JSONDecodeError as exc:
+            json.dump({"error": f"invalid items JSON: {exc}"}, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+            return 1
+        if not isinstance(items, list):
+            json.dump({"error": "items_json must be a JSON list"}, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+            return 1
+        data = {"deltas": compute_align_deltas(items, args.mode)}
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
     if args.command == "propose-reorder":
         data = propose_reorder_file(args.path, args.line_a, args.line_b).to_dict()
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "propose-section-reorder":
+        data = propose_section_reorder_file(
+            args.path, args.line_a, args.line_b
+        ).to_dict()
         if data.get("ok"):
             data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
             data["proposed_omitted"] = True
@@ -230,10 +382,22 @@ def main(argv: list[str] | None = None) -> int:
             quality=args.quality,
             save_sections=bool(args.save_sections),
             skip_until_section=args.skip_until_section,
+            method=args.method,
         )
         json.dump(result.to_dict(), sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0 if result.ok else 1
+
+    if args.command == "library-catalog":
+        try:
+            helpers = list_library_helpers(args.path)
+        except (OSError, ValueError) as exc:
+            json.dump({"ok": False, "error": str(exc)}, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+            return 1
+        json.dump({"ok": True, "helpers": helpers}, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
 
     if args.command == "scaffold-example":
         data = scaffold_example(args.dest)

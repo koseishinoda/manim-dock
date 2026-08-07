@@ -15,14 +15,23 @@ from typing import Any
 from manim_dock.doctor import run_doctor
 from manim_dock.extract import propose_extract_method_files
 from manim_dock.layout import parse_file_layout
+from manim_dock.library_catalog import list_library_helpers
 from manim_dock.outline import parse_file
+from manim_dock.align import compute_align_deltas
 from manim_dock.patch_layout import (
     propose_buff_file,
+    propose_font_size_file,
+    propose_lag_ratio_file,
     propose_scale_file,
     propose_shift_file,
 )
-from manim_dock.patch_timing import propose_duration_file, propose_reorder_file
+from manim_dock.patch_timing import (
+    propose_duration_file,
+    propose_reorder_file,
+    propose_section_reorder_file,
+)
 from manim_dock.render import render_scene
+from manim_dock.scrub import scrub_layout
 from manim_dock.timeline import parse_file_timeline
 
 
@@ -143,6 +152,75 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
                 anchor_line=anchor_line,
             ).to_dict()
         return propose_scale_file(str(path), str(name), factor, anchor_line).to_dict()
+    if method == "propose_font_size":
+        path = params.get("path")
+        name = params.get("name")
+        if not path or not name:
+            raise ValueError("params.path and params.name are required")
+        if params.get("font_size") is None:
+            raise ValueError("params.font_size is required")
+        font_size = float(params.get("font_size"))
+        anchor = params.get("anchor_line")
+        anchor_line = int(anchor) if anchor is not None else None
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_layout import propose_font_size
+
+            return propose_font_size(
+                source,
+                path=str(path),
+                name=str(name),
+                font_size=font_size,
+                anchor_line=anchor_line,
+            ).to_dict()
+        return propose_font_size_file(
+            str(path), str(name), font_size, anchor_line
+        ).to_dict()
+    if method == "propose_lag_ratio":
+        path = params.get("path")
+        name = params.get("name")
+        if not path or not name:
+            raise ValueError("params.path and params.name are required")
+        if params.get("lag_ratio") is None:
+            raise ValueError("params.lag_ratio is required")
+        lag_ratio = float(params.get("lag_ratio"))
+        anchor = params.get("anchor_line")
+        anchor_line = int(anchor) if anchor is not None else None
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_layout import propose_lag_ratio
+
+            return propose_lag_ratio(
+                source,
+                path=str(path),
+                name=str(name),
+                lag_ratio=lag_ratio,
+                anchor_line=anchor_line,
+            ).to_dict()
+        return propose_lag_ratio_file(
+            str(path), str(name), lag_ratio, anchor_line
+        ).to_dict()
+    if method == "scrub_layout":
+        path = params.get("path")
+        scene = params.get("scene")
+        active = params.get("active_until_line")
+        if not path or not scene or active is None:
+            raise ValueError(
+                "params.path, params.scene, and params.active_until_line are required"
+            )
+        source = params.get("source")
+        return scrub_layout(
+            str(path),
+            str(scene),
+            int(active),
+            source=source if isinstance(source, str) else None,
+        )
+    if method == "align_deltas":
+        items = params.get("items")
+        mode = params.get("mode")
+        if not isinstance(items, list) or not mode:
+            raise ValueError("params.items (list) and params.mode are required")
+        return {"deltas": compute_align_deltas(items, str(mode))}
     if method == "propose_reorder":
         path = params.get("path")
         line_a = params.get("line_a")
@@ -160,6 +238,25 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
                 line_b=int(line_b),
             ).to_dict()
         return propose_reorder_file(str(path), int(line_a), int(line_b)).to_dict()
+    if method == "propose_section_reorder":
+        path = params.get("path")
+        line_a = params.get("line_a")
+        line_b = params.get("line_b")
+        if not path or line_a is None or line_b is None:
+            raise ValueError("params.path, params.line_a, and params.line_b are required")
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_timing import propose_section_reorder
+
+            return propose_section_reorder(
+                source,
+                path=str(path),
+                line_a=int(line_a),
+                line_b=int(line_b),
+            ).to_dict()
+        return propose_section_reorder_file(
+            str(path), int(line_a), int(line_b)
+        ).to_dict()
     if method == "extract_method":
         path = params.get("path")
         scene = params.get("scene")
@@ -196,13 +293,22 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         save_sections = bool(params.get("save_sections") or False)
         skip_until = params.get("skip_until_section")
         skip_until_section = str(skip_until) if skip_until else None
+        method_name = params.get("method")
+        render_method = str(method_name) if method_name else None
         return render_scene(
             path,
             scene,
             quality=str(quality),
             save_sections=save_sections,
             skip_until_section=skip_until_section,
+            method=render_method,
         ).to_dict()
+    if method == "library_catalog":
+        library_path = params.get("path") or params.get("library_path")
+        if not library_path:
+            raise ValueError("params.path (library .py) is required")
+        helpers = list_library_helpers(str(library_path))
+        return {"ok": True, "helpers": helpers}
     if method == "doctor":
         return {"probes": [p.to_dict() for p in run_doctor()]}
     raise ValueError(f"unknown method: {method}")

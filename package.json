@@ -2,9 +2,17 @@
   "name": "manim-dock",
   "displayName": "Manim Dock",
   "description": "Dock Outline, Stage, and Timeline beside ManimCE Python for educational video production.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "manim-dock",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/koseishinoda/manim-dock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/koseishinoda/manim-dock/issues"
+  },
+  "homepage": "https://github.com/koseishinoda/manim-dock#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -19,6 +27,7 @@
     "education"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:python",
     "workspaceContains:**/*.py"
   ],
@@ -92,12 +101,26 @@
       },
       {
         "command": "manimDock.scaffoldExample",
-        "title": "Manim Dock: Scaffold Minimal Lesson"
+        "title": "Manim Dock: Scaffold Example Project"
+      },
+      {
+        "command": "manimDock.setPatchMode",
+        "title": "Manim Dock: Set Patch Mode"
       },
       {
         "command": "manimDock.extractMethod",
         "title": "Manim Dock: Extract Method to Library",
         "icon": "$(export)"
+      },
+      {
+        "command": "manimDock.browseLibrary",
+        "title": "Manim Dock: Browse Library Helpers",
+        "icon": "$(book)"
+      },
+      {
+        "command": "manimDock.renderMethod",
+        "title": "Manim Dock: Render Method",
+        "icon": "$(play-circle)"
       },
       {
         "command": "manimDock.debugSidecar",
@@ -145,6 +168,25 @@
           "command": "manimDock.insertTemplate",
           "when": "view == manimDock.outline",
           "group": "2_templates"
+        },
+        {
+          "command": "manimDock.setPatchMode",
+          "when": "view == manimDock.outline",
+          "group": "3_settings"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "manimDock.setPatchMode"
+        },
+        {
+          "command": "manimDock.scaffoldExample"
+        },
+        {
+          "command": "manimDock.browseLibrary"
+        },
+        {
+          "command": "manimDock.renderMethod"
         }
       ],
       "view/item/context": [
@@ -182,6 +224,19 @@
           "command": "manimDock.extractMethod",
           "when": "view == manimDock.outline && viewItem == manimDock.method",
           "group": "inline@1"
+        },
+        {
+          "command": "manimDock.renderMethod",
+          "when": "view == manimDock.outline && viewItem == manimDock.method",
+          "group": "inline@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "manimDock.browseLibrary"
+        },
+        {
+          "command": "manimDock.renderMethod"
         }
       ],
       "editor/title": [
@@ -212,6 +267,16 @@
         },
         {
           "command": "manimDock.renderWithSections",
+          "when": "resourceLangId == python",
+          "group": "1_manimDock"
+        },
+        {
+          "command": "manimDock.browseLibrary",
+          "when": "resourceLangId == python",
+          "group": "1_manimDock"
+        },
+        {
+          "command": "manimDock.renderMethod",
           "when": "resourceLangId == python",
           "group": "1_manimDock"
         }
@@ -246,6 +311,19 @@
             "2160p60"
           ],
           "description": "Manim quality flag for Manim Dock: Render Scene."
+        },
+        "manimDock.patchMode": {
+          "type": "string",
+          "default": "confirm",
+          "enum": [
+            "confirm",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Show confirm-diff, then Apply / Cancel",
+            "Apply immediately via WorkspaceEdit (Undo with Ctrl/Cmd+Z)"
+          ],
+          "markdownDescription": "How Stage / Timeline / Properties patches are applied to Python source. Also available via command **Manim Dock: Set Patch Mode**."
         }
       }
     },
@@ -260,11 +338,13 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "tsc -p ./ --noEmit"
+    "lint": "tsc -p ./ --noEmit",
+    "package": "npm run compile && npx --no-install vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
     "typescript": "^5.3.3"
   },
   "dependencies": {

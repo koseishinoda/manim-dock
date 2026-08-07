@@ -8,17 +8,21 @@ It docks Outline, Stage, and Timeline tools beside your normal Manim Python — 
 
 ## Status
 
-**V1 (`v0.0.1`):** Outline, Doctor, QL + section-aware render, Stage, Timeline (pace/reorder/scrub), Properties (shift/buff/scale/duration), library extract, templates/snippets, editor↔surface sync. Plan: [docs/v1-architecture-plan.md](docs/v1-architecture-plan.md).
+**Current:** `v0.0.2` (V2 complete: Phases 6–8).
+
+- V1 (`v0.0.1`): Outline, Doctor, Stage, Timeline, Properties, extract, templates — [plan](docs/v1-architecture-plan.md)
+- V2 (`v0.0.2`): `patchMode`, VSIX, font_size/lag_ratio, align/distribute, scrub, P07–P10, library browser, render-method — [roadmap](docs/v2-roadmap.md)
+- V3: [v3-roadmap.md](docs/v3-roadmap.md)
 
 Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains optional for a richer player — see [docs/sideview.md](docs/sideview.md).
 
-**Try Stage / Timeline:** open `examples/minimal_lesson/lesson.py` → **Open Stage** / **Open Timeline** → drag → confirm-diff → Apply.
+**Try Stage / Timeline:** open `examples/minimal_lesson/lesson.py` → **Open Stage** / **Open Timeline** → drag → apply (confirm-diff, or set `manimDock.patchMode` to `auto`).
 
-**Try templates:** copy from `templates/` (`basic_scene.py`, `multi_section_scene.py`, `multi_scene_project.py`), or `python -m manim_dock.cli scaffold-example DEST`.
+**Try templates:** Command **Manim Dock: Insert Template**, or copy from `templates/`, or **Scaffold Example Project**.
 
 **Try library extract (P15):** Outline → right-click a method (e.g. `title_card`) → **Extract Method to Library**, or use `examples/lesson_lib` + `examples/lesson_with_lib/lesson.py` (`PYTHONPATH=examples`).
 
-Architecture plan (in-repo): [docs/v1-architecture-plan.md](docs/v1-architecture-plan.md).
+Plans (in-repo): [V1](docs/v1-architecture-plan.md) · [V2 roadmap](docs/v2-roadmap.md) · [Validation checklist](docs/validation-checklist.md).
 
 ## Product pillars
 
@@ -62,7 +66,7 @@ PYTHONPATH=. python3 -m manim_dock.cli outline ../examples/minimal_lesson/lesson
 PYTHONPATH=. python3 -m manim_dock.cli doctor
 ```
 
-### VS Code extension
+### VS Code extension (development)
 
 ```bash
 npm install
@@ -70,6 +74,18 @@ npm run compile
 # Then: Run Extension (F5) — launch config "Run Manim Dock Extension"
 # Open examples/minimal_lesson/lesson.py and check the Manim Dock Outline view
 ```
+
+### Install from VSIX
+
+```bash
+npm install
+npm run package          # writes manim-dock-0.1.0.vsix
+# Cursor / VS Code: Extensions → ⋯ → Install from VSIX…
+```
+
+Set `manimDock.pythonPath` to an interpreter that can `import manim` (and has `libcst` for patches: `pip install libcst`).
+
+Optional: Settings → **Manim Dock: Patch Mode** → `auto` for drag→apply without confirm-diff (Undo still works).
 
 ## License
 

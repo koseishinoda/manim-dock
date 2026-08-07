@@ -96,6 +96,62 @@
     ],
     "description": "P06 — two-column diagram | explanation"
   },
+  "Manim Dock: Brace callout": {
+    "prefix": "md-brace",
+    "body": [
+      "brace = Brace(${1:target}, ${2:DOWN})",
+      "label = Text(\"${3:callout}\", font_size=28).next_to(brace, ${2:DOWN}, buff=0.15)",
+      "self.play(GrowFromCenter(brace), FadeIn(label))",
+      "self.wait(${4:0.5})",
+      "$0"
+    ],
+    "description": "P07 — Brace + label callout under a mobject"
+  },
+  "Manim Dock: Axes / NumberPlane intro": {
+    "prefix": "md-axes",
+    "body": [
+      "plane = NumberPlane(x_range=${1:(-3, 3, 1)}, y_range=${2:(-2, 2, 1)})",
+      "self.play(Create(plane), run_time=${3:1.2})",
+      "self.wait(${4:0.5})",
+      "$0"
+    ],
+    "description": "P08 — NumberPlane / Axes intro Create"
+  },
+  "Manim Dock: Side-by-side compare": {
+    "prefix": "md-vs",
+    "body": [
+      "left = VGroup(",
+      "    Text(\"${1:Option A}\", font_size=32),",
+      "    Text(\"${2:…}\", font_size=24),",
+      ").arrange(DOWN, buff=0.2)",
+      "vs = Text(\"vs\", font_size=28, color=YELLOW)",
+      "right = VGroup(",
+      "    Text(\"${3:Option B}\", font_size=32),",
+      "    Text(\"${4:…}\", font_size=24),",
+      ").arrange(DOWN, buff=0.2)",
+      "row = VGroup(left, vs, right).arrange(RIGHT, buff=${5:0.8})",
+      "self.play(FadeIn(row))",
+      "self.wait(${6:0.5})",
+      "$0"
+    ],
+    "description": "P09 — side-by-side compare (vs)"
+  },
+  "Manim Dock: Succession beat": {
+    "prefix": "md-succession",
+    "body": [
+      "self.play(",
+      "    Succession(",
+      "        ${1:FadeIn(mob_a)},",
+      "        ${2:FadeIn(mob_b)},",
+      "        ${3:FadeIn(mob_c)},",
+      "    ),",
+      "    run_time=${4:2.0},",
+      ")",
+      "self.wait(${5:0.5})",
+      "$0"
+    ],
+    "description": "P10 — Succession beat of animations"
+  },
   "Manim Dock: Cleanup fade": {
     "prefix": "md-cleanup",
     "body": [

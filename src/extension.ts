@@ -19,9 +19,24 @@ export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Manim Dock");
   const outlineProvider = new OutlineProvider(sidecar, output);
   ProposedPatchProvider.ensure(context);
+  const patchModeStatus = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    90
+  );
+  patchModeStatus.command = "manimDock.setPatchMode";
+  patchModeStatus.tooltip = "Manim Dock: Set Patch Mode (confirm | auto)";
+  const refreshPatchModeStatus = (): void => {
+    const mode =
+      vscode.workspace.getConfiguration("manimDock").get<string>("patchMode") ||
+      "confirm";
+    patchModeStatus.text = `$(edit) Patch: ${mode}`;
+    patchModeStatus.show();
+  };
+  refreshPatchModeStatus();
 
   context.subscriptions.push(
     output,
+    patchModeStatus,
     vscode.window.registerTreeDataProvider("manimDock.outline", outlineProvider),
     vscode.commands.registerCommand("manimDock.refreshOutline", () => {
       output.appendLine("Refreshing outline…");
@@ -122,6 +137,44 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("manimDock.scaffoldExample", async () => {
       await scaffoldExampleCommand(context, output);
     }),
+    vscode.commands.registerCommand("manimDock.setPatchMode", async () => {
+      const current =
+        vscode.workspace.getConfiguration("manimDock").get<string>("patchMode") ||
+        "confirm";
+      const picked = await vscode.window.showQuickPick(
+        [
+          {
+            label: "confirm",
+            description: "Show confirm-diff, then Apply / Cancel (default)",
+            picked: current === "confirm",
+          },
+          {
+            label: "auto",
+            description: "Apply immediately; Undo with Ctrl/Cmd+Z",
+            picked: current === "auto",
+          },
+        ],
+        {
+          placeHolder: `Current: ${current}`,
+          title: "Manim Dock: Set Patch Mode",
+        }
+      );
+      if (!picked) {
+        return;
+      }
+      await vscode.workspace
+        .getConfiguration("manimDock")
+        .update("patchMode", picked.label, vscode.ConfigurationTarget.Global);
+      refreshPatchModeStatus();
+      void vscode.window.showInformationMessage(
+        `Manim Dock: patchMode = ${picked.label}`
+      );
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("manimDock.patchMode")) {
+        refreshPatchModeStatus();
+      }
+    }),
     vscode.commands.registerCommand(
       "manimDock.extractMethod",
       async (item?: unknown) => {
@@ -132,6 +185,15 @@ export function activate(context: vscode.ExtensionContext): void {
           output,
           item
         );
+      }
+    ),
+    vscode.commands.registerCommand("manimDock.browseLibrary", async () => {
+      await browseLibraryCommand(context, sidecar, output);
+    }),
+    vscode.commands.registerCommand(
+      "manimDock.renderMethod",
+      async (item?: unknown) => {
+        await renderMethodCommand(sidecar, outlineProvider, output, item);
       }
     ),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
@@ -364,6 +426,219 @@ async function scaffoldExampleCommand(
     const doc = await vscode.workspace.openTextDocument(lessonPath);
     await vscode.window.showTextDocument(doc);
   }
+}
+
+async function resolveLibraryPath(
+  context: vscode.ExtensionContext
+): Promise<string | undefined> {
+  const candidates: string[] = [];
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const root = folder.uri.fsPath;
+    candidates.push(
+      path.join(root, "lesson_lib", "patterns.py"),
+      path.join(root, "examples", "lesson_lib", "patterns.py"),
+      path.join(root, "lesson_lib.py")
+    );
+  }
+  candidates.push(
+    path.join(
+      context.extensionPath,
+      "examples",
+      "lesson_lib",
+      "patterns.py"
+    )
+  );
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { Python: ["py"] },
+    openLabel: "Choose library module",
+    title: "Manim Dock: library .py for browse",
+  });
+  return picked?.[0]?.fsPath;
+}
+
+async function browseLibraryCommand(
+  context: vscode.ExtensionContext,
+  sidecar: SidecarClient,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const libraryPath = await resolveLibraryPath(context);
+  if (!libraryPath) {
+    void vscode.window.showWarningMessage(
+      "Manim Dock: no lesson_lib/patterns.py found."
+    );
+    return;
+  }
+
+  let helpers;
+  try {
+    helpers = await sidecar.libraryCatalog(libraryPath);
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `Manim Dock library catalog failed: ${String(err)}`
+    );
+    return;
+  }
+  if (!helpers.length) {
+    void vscode.window.showWarningMessage(
+      `Manim Dock: no helpers found in ${libraryPath}`
+    );
+    return;
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    helpers.map((h) => ({
+      label: h.name,
+      description: h.signature,
+      detail: h.doc || undefined,
+      insert: h.insert,
+    })),
+    { placeHolder: `Insert helper from ${path.basename(libraryPath)}` }
+  );
+  if (!picked) {
+    return;
+  }
+
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== "python") {
+    void vscode.window.showWarningMessage(
+      "Manim Dock: open a Python editor to insert a library helper."
+    );
+    return;
+  }
+
+  // Snippet-style $0 → cursor; insert as plain text at the cursor.
+  const text = picked.insert.replace(/\$0/g, "");
+  const pos = editor.selection.active;
+  await editor.edit((builder) => {
+    builder.insert(pos, text);
+  });
+  output.appendLine(`[library] inserted ${picked.label} from ${libraryPath}`);
+}
+
+async function resolveMethodTarget(
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<
+  { filePath: string; sceneName: string; methodName: string } | undefined
+> {
+  const fromTree = asMethodTarget(item);
+  if (fromTree) {
+    return fromTree;
+  }
+
+  const resolved = await outlineProvider.resolvePythonOutline();
+  if ("error" in resolved) {
+    output.appendLine(resolved.error);
+    void vscode.window.showErrorMessage(`Manim Dock: ${resolved.error}`);
+    return undefined;
+  }
+
+  const editor = vscode.window.activeTextEditor;
+  const cursorLine =
+    editor?.document.uri.fsPath === resolved.filePath
+      ? editor.selection.active.line + 1
+      : undefined;
+
+  type MethodChoice = {
+    label: string;
+    description: string;
+    sceneName: string;
+    methodName: string;
+  };
+  const choices: MethodChoice[] = [];
+  for (const scene of resolved.outline.scenes) {
+    for (const method of scene.methods) {
+      if (method.name === "construct") {
+        continue;
+      }
+      choices.push({
+        label: method.name,
+        description: scene.name,
+        sceneName: scene.name,
+        methodName: method.name,
+      });
+    }
+  }
+  if (!choices.length) {
+    void vscode.window.showWarningMessage(
+      "Manim Dock: no non-construct methods found on the active scene file."
+    );
+    return undefined;
+  }
+
+  if (cursorLine !== undefined) {
+    for (const scene of resolved.outline.scenes) {
+      for (const method of scene.methods) {
+        if (method.name === "construct") {
+          continue;
+        }
+        if (
+          method.range.start_line <= cursorLine &&
+          cursorLine <= method.range.end_line
+        ) {
+          return {
+            filePath: resolved.filePath,
+            sceneName: scene.name,
+            methodName: method.name,
+          };
+        }
+      }
+    }
+  }
+
+  if (choices.length === 1) {
+    return {
+      filePath: resolved.filePath,
+      sceneName: choices[0].sceneName,
+      methodName: choices[0].methodName,
+    };
+  }
+
+  const picked = await vscode.window.showQuickPick(choices, {
+    placeHolder: "Select a method to render",
+  });
+  if (!picked) {
+    return undefined;
+  }
+  return {
+    filePath: resolved.filePath,
+    sceneName: picked.sceneName,
+    methodName: picked.methodName,
+  };
+}
+
+async function renderMethodCommand(
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<void> {
+  const target = await resolveMethodTarget(outlineProvider, output, item);
+  if (!target) {
+    return;
+  }
+  await renderSceneCommand(
+    sidecar,
+    outlineProvider,
+    output,
+    {
+      filePath: target.filePath,
+      scene: { name: target.sceneName },
+    },
+    {
+      method: target.methodName,
+      titleSuffix: ` · ${target.methodName}()`,
+    }
+  );
 }
 
 async function extractMethodCommand(
@@ -603,10 +878,11 @@ async function renderSceneCommand(
 
   const suffix = options?.titleSuffix ?? "";
   const renderOpts: RenderOptions | undefined =
-    options?.saveSections || options?.skipUntilSection
+    options?.saveSections || options?.skipUntilSection || options?.method
       ? {
           saveSections: options.saveSections,
           skipUntilSection: options.skipUntilSection,
+          method: options.method,
         }
       : undefined;
 
@@ -617,6 +893,7 @@ async function renderSceneCommand(
       (renderOpts?.skipUntilSection
         ? ` skip_until=${renderOpts.skipUntilSection}`
         : "") +
+      (renderOpts?.method ? ` method=${renderOpts.method}` : "") +
       " ==="
   );
 

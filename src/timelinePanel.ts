@@ -17,6 +17,7 @@ export class TimelinePanel {
   private filePath: string | undefined;
   private sceneName: string | undefined;
   private timeline: SceneTimeline | undefined;
+  private lastScrubTime = 0;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -92,6 +93,26 @@ export class TimelinePanel {
     void cur.panel.webview.postMessage({ type: "highlightLine", line });
   }
 
+  static highlightTime(filePath: string, time: number): void {
+    const cur = TimelinePanel.current;
+    if (!cur?.filePath || cur.filePath !== filePath) {
+      return;
+    }
+    void cur.panel.webview.postMessage({ type: "highlightTime", time });
+  }
+
+  /** After Stage reloads layout, push a fresh scrub so overrides match new source. */
+  static reemitScrubIfOpen(filePath: string): void {
+    const cur = TimelinePanel.current;
+    if (!cur?.filePath || cur.filePath !== filePath) {
+      return;
+    }
+    const time = cur.lastScrubTime;
+    const activeUntilLine = cur.activeUntilLineAt(time);
+    StagePanel.scrub(filePath, time, activeUntilLine);
+    TimelinePanel.highlightTime(filePath, time);
+  }
+
   async refresh(): Promise<void> {
     if (!this.filePath || !this.sceneName) {
       return;
@@ -163,11 +184,17 @@ export class TimelinePanel {
     if (type === "select") {
       const range = rec.range as SourceRange | undefined;
       if (range && this.filePath) {
-        await revealRange(this.filePath, range);
+        await revealRange(this.filePath, range, {
+          preserveFocus: true,
+          preview: true,
+        });
         const kind = String(rec.kind ?? "");
         const line = Number(rec.line ?? range.start_line ?? 0);
         const duration = Number(rec.duration ?? 0);
-        if (kind === "play" || kind === "wait" || kind === "next_section") {
+        if (
+          PropertiesPanel.isOpenFor(this.filePath) &&
+          (kind === "play" || kind === "wait" || kind === "next_section")
+        ) {
           PropertiesPanel.setSelection(this.filePath, {
             kind: "event",
             eventKind: kind,
@@ -184,8 +211,10 @@ export class TimelinePanel {
       if (!this.filePath || !Number.isFinite(time)) {
         return;
       }
+      this.lastScrubTime = time;
       const activeUntilLine = this.activeUntilLineAt(time);
       StagePanel.scrub(this.filePath, time, activeUntilLine);
+      TimelinePanel.highlightTime(this.filePath, time);
       return;
     }
 
@@ -205,19 +234,31 @@ export class TimelinePanel {
     }
     const lineA = Number(rec.lineA ?? 0);
     const lineB = Number(rec.lineB ?? 0);
+    const kind = String(rec.kind ?? "beat");
     if (!lineA || !lineB || lineA === lineB) {
+      return;
+    }
+    if (kind !== "beat" && kind !== "section") {
       return;
     }
 
     const doc = await vscode.workspace.openTextDocument(this.filePath);
     let proposal;
     try {
-      proposal = await this.sidecar.proposeReorder(
-        this.filePath,
-        lineA,
-        lineB,
-        doc.getText()
-      );
+      proposal =
+        kind === "section"
+          ? await this.sidecar.proposeSectionReorder(
+              this.filePath,
+              lineA,
+              lineB,
+              doc.getText()
+            )
+          : await this.sidecar.proposeReorder(
+              this.filePath,
+              lineA,
+              lineB,
+              doc.getText()
+            );
     } catch (err) {
       void vscode.window.showErrorMessage(
         `Manim Dock reorder failed: ${String(err)}`
@@ -332,12 +373,51 @@ export class TimelinePanel {
       font-size: 12px; border-bottom: 1px solid #333; flex-wrap: wrap; }
     .bar strong { color: #eee; }
     .hint { opacity: 0.7; }
-    .scrub-wrap { display: flex; align-items: center; gap: 8px; min-width: 160px; flex: 1 1 180px; }
-    .scrub-wrap input[type="range"] { flex: 1 1 auto; min-width: 80px; }
-    #scrubLabel { font-variant-numeric: tabular-nums; opacity: 0.85; min-width: 48px; }
     #rows { flex: 1 1 auto; min-height: 0; padding: 12px; overflow: auto; box-sizing: border-box; }
-    .row { display: grid; grid-template-columns: minmax(96px, 140px) minmax(0, 1fr) 56px 52px; gap: 8px;
-      align-items: center; margin-bottom: 6px; font-size: 12px; }
+    .scrub-row, .row {
+      display: grid;
+      grid-template-columns: minmax(96px, 140px) minmax(0, 1fr) 56px;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+    .scrub-row {
+      position: sticky; top: 0; z-index: 5;
+      margin: 0 0 10px 0; padding: 8px 0;
+      /* Fully opaque — rows scrolling underneath must not show through. */
+      background: #1a1b1e;
+      background-color: rgb(26, 27, 30);
+      opacity: 1;
+      border-bottom: 1px solid #333;
+      box-shadow: 0 8px 0 0 #1a1b1e;
+    }
+    .scrub-row .scrub-gutter { color: #c8c8c8; opacity: 1; }
+    .scrub-row .scrub-track { min-width: 0; }
+    .scrub-row input[type="range"] { width: 100%; margin: 0; display: block; }
+    #scrubLabel { text-align: right; font-variant-numeric: tabular-nums; color: #c8c8c8; opacity: 1; }
+    .row { margin-bottom: 6px; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .row.sortable { cursor: grab; touch-action: none; }
+    .row.sortable:active { cursor: grabbing; }
+    .row.sortable-dragging {
+      opacity: 0.92; z-index: 4; position: relative;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.45); background: #22232a;
+      transition: none;
+    }
+    .row.sortable-ghost { opacity: 0.35; }
+    .section-group {
+      margin: 0 0 10px 0; padding: 4px 4px 2px 4px;
+      border-left: 2px solid #444; border-radius: 2px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+    }
+    .section-group.sortable { cursor: grab; touch-action: none; }
+    .section-group.sortable-dragging {
+      opacity: 0.95; z-index: 4; position: relative;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.5); background: #1e1f26;
+      transition: none;
+    }
+    .section-group.sortable-ghost { opacity: 0.4; }
+    .section-group .row { margin-bottom: 4px; }
     .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; min-width: 0; }
     .label:hover { color: #fff; }
     .track { position: relative; height: 22px; width: 100%; min-width: 0;
@@ -349,12 +429,6 @@ export class TimelinePanel {
     .block.locked { opacity: 0.55; }
     .handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
     .dur { text-align: right; opacity: 0.85; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .reorder { display: flex; gap: 2px; justify-content: flex-end; }
-    .reorder button {
-      background: #2a2a2e; color: #ddd; border: 1px solid #555; border-radius: 2px;
-      padding: 0 6px; font: inherit; cursor: pointer; line-height: 18px;
-    }
-    .reorder button:disabled { opacity: 0.35; cursor: default; }
     .section-row .label { font-weight: 600; color: #ddd; }
     .row.active { outline: 1px solid #ffe08a; outline-offset: 2px; border-radius: 2px; }
     .row.active .label { color: #ffe08a; }
@@ -363,22 +437,20 @@ export class TimelinePanel {
 <body>
   <div class="bar">
     <strong id="title">Timeline</strong>
-    <div class="scrub-wrap">
-      <span>Scrub</span>
-      <input id="scrub" type="range" min="0" max="1" step="0.01" value="0" />
-      <span id="scrubLabel">0s</span>
-    </div>
-    <span class="hint">Scrub syncs Stage · ↑↓ reorder adjacent play/wait · drag edge for duration · confirm-diff</span>
+    <span class="hint">Scrub syncs Stage · drag beats within a section · drag a § group to swap with a neighbor section · drag bar edge for duration</span>
   </div>
   <div id="rows"></div>
   <script>
     const vscode = acquireVsCodeApi();
     const rowsEl = document.getElementById('rows');
     const titleEl = document.getElementById('title');
-    const scrubEl = document.getElementById('scrub');
-    const scrubLabel = document.getElementById('scrubLabel');
+    let scrubEl = null;
+    let scrubLabel = null;
     let timeline = null;
     let pendingHighlightLine = null;
+    let pendingHighlightTime = null;
+    let scrubTime = 0;
+    let reorderArmed = false;
 
     function fmt(n) {
       return (Math.round(n * 100) / 100).toString();
@@ -388,6 +460,202 @@ export class TimelinePanel {
       return ev.kind === 'play' || ev.kind === 'wait';
     }
 
+    function eventSection(ev) {
+      return (ev && ev.section != null) ? String(ev.section) : '';
+    }
+
+    function sectionGroups() {
+      return Array.from(rowsEl.querySelectorAll(':scope > .section-group'));
+    }
+
+    /**
+     * Beat reorder: live insertBefore among peers in one section group.
+     * Section reorder: live swap of whole .section-group blocks (header + beats), neighbor-only.
+     */
+    function bindBeatSortable(row, opts) {
+      row.classList.add('sortable');
+      const grip = row.querySelector('.label') || row;
+      let startY = 0;
+      let fromPos = opts.pos;
+      let active = false;
+      let moved = false;
+
+      const peerRows = () => {
+        const group = row.closest('.section-group') || rowsEl;
+        return Array.from(group.querySelectorAll('.row')).filter((el) => {
+          return el.dataset.sortKind === 'beat' && el.dataset.section === opts.section;
+        });
+      };
+
+      const onPointerMove = (e) => {
+        if (!active) return;
+        const dy = e.clientY - startY;
+        if (!moved && Math.abs(dy) < 4) return;
+        moved = true;
+        reorderArmed = true;
+        row.classList.add('sortable-dragging');
+        row.style.transform = 'translateY(' + dy + 'px)';
+        const peers = peerRows();
+        const idx = peers.indexOf(row);
+        if (idx < 0) return;
+        const rect = row.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const parent = row.parentElement;
+        for (let i = 0; i < peers.length; i++) {
+          const other = peers[i];
+          if (other === row) continue;
+          const or = other.getBoundingClientRect();
+          const oMid = or.top + or.height / 2;
+          if (midY < oMid && i < idx) {
+            parent.insertBefore(row, other);
+            startY = e.clientY;
+            row.style.transform = '';
+            break;
+          }
+          if (midY > oMid && i > idx) {
+            parent.insertBefore(other, row);
+            startY = e.clientY;
+            row.style.transform = '';
+            break;
+          }
+        }
+      };
+
+      const endPointer = (e) => {
+        if (!active) return;
+        active = false;
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', endPointer);
+        window.removeEventListener('pointercancel', endPointer);
+        row.classList.remove('sortable-dragging');
+        row.style.transform = '';
+        try { row.releasePointerCapture(e.pointerId); } catch (_) {}
+        if (!moved) {
+          reorderArmed = false;
+          return;
+        }
+        const peers = peerRows();
+        const toPos = peers.indexOf(row);
+        const list = opts.list;
+        if (toPos < 0 || toPos === fromPos || !list[fromPos] || !list[toPos]) {
+          reorderArmed = false;
+          rebuild();
+          return;
+        }
+        vscode.postMessage({
+          type: 'reorder',
+          kind: 'beat',
+          lineA: list[fromPos].range && list[fromPos].range.start_line,
+          lineB: list[toPos].range && list[toPos].range.start_line
+        });
+        setTimeout(() => { reorderArmed = false; }, 0);
+      };
+
+      grip.addEventListener('pointerdown', (e) => {
+        if (e.button != null && e.button !== 0) return;
+        if (e.target && e.target.closest && e.target.closest('.handle')) return;
+        e.stopPropagation(); // don't start section-group drag
+        active = true;
+        moved = false;
+        fromPos = opts.pos;
+        startY = e.clientY;
+        try { row.setPointerCapture(e.pointerId); } catch (_) {}
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', endPointer);
+        window.addEventListener('pointercancel', endPointer);
+      });
+    }
+
+    function bindSectionGroupSortable(group, opts) {
+      group.classList.add('sortable');
+      const grip = group.querySelector('.section-row .label') || group;
+      let startY = 0;
+      let fromPos = opts.pos;
+      let active = false;
+      let moved = false;
+
+      const onPointerMove = (e) => {
+        if (!active) return;
+        const dy = e.clientY - startY;
+        if (!moved && Math.abs(dy) < 4) return;
+        moved = true;
+        reorderArmed = true;
+        group.classList.add('sortable-dragging');
+        group.style.transform = 'translateY(' + dy + 'px)';
+
+        const peers = sectionGroups();
+        const idx = peers.indexOf(group);
+        if (idx < 0) return;
+        // Neighbor-only: swap with adjacent group when crossing its midline.
+        const prev = peers[idx - 1];
+        const next = peers[idx + 1];
+        const midY = group.getBoundingClientRect().top + group.getBoundingClientRect().height / 2;
+        if (prev) {
+          const pr = prev.getBoundingClientRect();
+          if (midY < pr.top + pr.height / 2) {
+            rowsEl.insertBefore(group, prev);
+            startY = e.clientY;
+            group.style.transform = '';
+            return;
+          }
+        }
+        if (next) {
+          const nr = next.getBoundingClientRect();
+          if (midY > nr.top + nr.height / 2) {
+            rowsEl.insertBefore(next, group);
+            startY = e.clientY;
+            group.style.transform = '';
+          }
+        }
+      };
+
+      const endPointer = (e) => {
+        if (!active) return;
+        active = false;
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', endPointer);
+        window.removeEventListener('pointercancel', endPointer);
+        group.classList.remove('sortable-dragging');
+        group.style.transform = '';
+        try { group.releasePointerCapture(e.pointerId); } catch (_) {}
+        if (!moved) {
+          reorderArmed = false;
+          return;
+        }
+        const peers = sectionGroups();
+        const toPos = peers.indexOf(group);
+        const list = opts.list;
+        if (toPos < 0 || toPos === fromPos || Math.abs(toPos - fromPos) !== 1
+            || !list[fromPos] || !list[toPos]) {
+          reorderArmed = false;
+          rebuild();
+          return;
+        }
+        vscode.postMessage({
+          type: 'reorder',
+          kind: 'section',
+          lineA: list[fromPos].range && list[fromPos].range.start_line,
+          lineB: list[toPos].range && list[toPos].range.start_line
+        });
+        setTimeout(() => { reorderArmed = false; }, 0);
+      };
+
+      grip.addEventListener('pointerdown', (e) => {
+        if (e.button != null && e.button !== 0) return;
+        if (e.target && e.target.closest && e.target.closest('.handle')) return;
+        // Beats handle their own drag (stopPropagation). § label starts group drag.
+        if (e.target && e.target.closest && e.target.closest('.row.beat')) return;
+        active = true;
+        moved = false;
+        fromPos = opts.pos;
+        startY = e.clientY;
+        try { group.setPointerCapture(e.pointerId); } catch (_) {}
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', endPointer);
+        window.addEventListener('pointercancel', endPointer);
+      });
+    }
+
     function rebuild() {
       rowsEl.innerHTML = '';
       if (!timeline) return;
@@ -395,31 +663,72 @@ export class TimelinePanel {
       const total = Math.max(timeline.total_duration || 1, 0.01);
       titleEl.textContent = 'Timeline: ' + (timeline.scene || '') +
         ' · ' + fmt(total) + 's';
+
+      const scrubRow = document.createElement('div');
+      scrubRow.className = 'scrub-row';
+      scrubRow.innerHTML =
+        '<div class="scrub-gutter">Scrub</div>' +
+        '<div class="scrub-track"><input id="scrub" type="range" min="0" max="1" step="0.01" value="0" /></div>' +
+        '<div id="scrubLabel">0s</div>';
+      rowsEl.appendChild(scrubRow);
+      scrubEl = document.getElementById('scrub');
+      scrubLabel = document.getElementById('scrubLabel');
       scrubEl.max = String(total);
       scrubEl.step = String(Math.max(0.01, total / 200));
-      if (Number(scrubEl.value) > total) {
-        scrubEl.value = String(total);
-      }
-      scrubLabel.textContent = fmt(Number(scrubEl.value)) + 's';
-
-      const beatIndices = [];
-      events.forEach((ev, i) => {
-        if (isBeat(ev)) beatIndices.push(i);
+      const t0 = Math.max(0, Math.min(total, scrubTime || 0));
+      scrubEl.value = String(t0);
+      scrubLabel.textContent = fmt(t0) + 's';
+      scrubEl.addEventListener('input', () => {
+        const time = Number(scrubEl.value) || 0;
+        scrubTime = time;
+        scrubLabel.textContent = fmt(time) + 's';
+        vscode.postMessage({ type: 'scrub', time: time });
       });
+      // Keep Stage scrub overrides in sync after Timeline rebuild / source patch.
+      vscode.postMessage({ type: 'scrub', time: t0 });
 
-      for (let i = 0; i < events.length; i++) {
-        const ev = events[i];
+      // Group events into section blocks (matches propose_section_reorder).
+      const groups = [];
+      let cur = { section: '', sectionEv: null, beats: [] };
+      events.forEach((ev, i) => {
+        if (ev.kind === 'next_section') {
+          if (cur.sectionEv || cur.beats.length) groups.push(cur);
+          cur = { section: eventSection(ev) || String(ev.label || ''), sectionEv: ev, beats: [] };
+        } else if (isBeat(ev)) {
+          cur.beats.push({ ev: ev, index: i });
+        }
+      });
+      if (cur.sectionEv || cur.beats.length) groups.push(cur);
+
+      const sectionMarkers = groups
+        .filter((g) => g.sectionEv)
+        .map((g) => g.sectionEv);
+
+      function buildRow(ev, eventIndex) {
         const row = document.createElement('div');
-        row.className = 'row' + (ev.kind === 'next_section' ? ' section-row' : '');
+        row.className = 'row' + (ev.kind === 'next_section' ? ' section-row' : '') +
+          (isBeat(ev) ? ' beat' : '');
         row.dataset.startLine = String(ev.range && ev.range.start_line || 0);
         row.dataset.endLine = String(ev.range && ev.range.end_line || 0);
         row.dataset.method = ev.method || '';
+        row.dataset.eventIndex = String(eventIndex);
+        row.dataset.eventId = String(ev.id || eventIndex);
+        row.dataset.kind = ev.kind || '';
+        row.dataset.section = eventSection(ev);
+        row.dataset.start = String(ev.start || 0);
+        row.dataset.duration = String(ev.duration || 0);
 
         const label = document.createElement('div');
         label.className = 'label';
-        label.title = (ev.note || '') + (ev.method ? ' @ ' + ev.method : '');
+        const dragHint = isBeat(ev)
+          ? ' · drag to reorder within this section'
+          : (ev.kind === 'next_section'
+            ? ' · drag this section group to swap with a neighbor'
+            : '');
+        label.title = (ev.note || '') + (ev.method ? ' @ ' + ev.method : '') + dragHint;
         label.textContent = ev.kind === 'next_section' ? ('§ ' + ev.label) : ev.label;
         label.addEventListener('click', () => {
+          if (reorderArmed) return;
           vscode.postMessage({
             type: 'select',
             range: ev.range,
@@ -431,13 +740,10 @@ export class TimelinePanel {
 
         const track = document.createElement('div');
         track.className = 'track';
-
-        // Percentage of total duration — always stays inside the track box.
         const leftPct = Math.max(0, Math.min(100, ((ev.start || 0) / total) * 100));
         const widthPct = ev.kind === 'next_section'
           ? 0
           : Math.max(0.5, Math.min(100 - leftPct, ((ev.duration || 0) / total) * 100));
-
         const block = document.createElement('div');
         block.className = 'block ' + ev.kind + (ev.editable ? '' : ' locked');
         block.style.left = leftPct + '%';
@@ -494,84 +800,110 @@ export class TimelinePanel {
           });
         }
 
-        const reorder = document.createElement('div');
-        reorder.className = 'reorder';
-        if (isBeat(ev)) {
-          const posAmongBeats = beatIndices.indexOf(i);
-          const up = document.createElement('button');
-          up.textContent = '↑';
-          up.title = 'Swap with previous play/wait';
-          up.disabled = posAmongBeats <= 0;
-          up.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (posAmongBeats <= 0) return;
-            const prev = events[beatIndices[posAmongBeats - 1]];
-            vscode.postMessage({
-              type: 'reorder',
-              lineA: ev.range && ev.range.start_line,
-              lineB: prev.range && prev.range.start_line
-            });
-          });
-          const down = document.createElement('button');
-          down.textContent = '↓';
-          down.title = 'Swap with next play/wait';
-          down.disabled = posAmongBeats < 0 || posAmongBeats >= beatIndices.length - 1;
-          down.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (posAmongBeats < 0 || posAmongBeats >= beatIndices.length - 1) return;
-            const next = events[beatIndices[posAmongBeats + 1]];
-            vscode.postMessage({
-              type: 'reorder',
-              lineA: ev.range && ev.range.start_line,
-              lineB: next.range && next.range.start_line
-            });
-          });
-          reorder.appendChild(up);
-          reorder.appendChild(down);
-        }
-
         row.appendChild(label);
         row.appendChild(track);
         row.appendChild(dur);
-        row.appendChild(reorder);
-        rowsEl.appendChild(row);
+        return row;
       }
-      if (pendingHighlightLine != null) {
+
+      groups.forEach((g) => {
+        const groupEl = document.createElement('div');
+        groupEl.className = 'section-group';
+        groupEl.dataset.section = g.section;
+
+        if (g.sectionEv) {
+          const secIdx = events.indexOf(g.sectionEv);
+          const secRow = buildRow(g.sectionEv, secIdx >= 0 ? secIdx : 0);
+          secRow.dataset.sortKind = 'section';
+          groupEl.appendChild(secRow);
+          const pos = sectionMarkers.indexOf(g.sectionEv);
+          if (pos >= 0) {
+            bindSectionGroupSortable(groupEl, {
+              pos: pos,
+              list: sectionMarkers
+            });
+          }
+        }
+
+        const beatList = g.beats.map((b) => b.ev);
+        g.beats.forEach((b, beatPos) => {
+          const beatRow = buildRow(b.ev, b.index);
+          beatRow.dataset.sortKind = 'beat';
+          bindBeatSortable(beatRow, {
+            pos: beatPos,
+            section: eventSection(b.ev),
+            list: beatList
+          });
+          groupEl.appendChild(beatRow);
+        });
+
+        rowsEl.appendChild(groupEl);
+      });
+      if (pendingHighlightTime != null) {
+        highlightTime(pendingHighlightTime);
+      } else if (pendingHighlightLine != null) {
         highlightLine(pendingHighlightLine);
       }
     }
 
-    function highlightLine(line) {
-      pendingHighlightLine = line;
-      const rows = rowsEl.querySelectorAll('.row');
-      let best = null;
-      let bestDist = Infinity;
-      rows.forEach((row) => {
+    function clearActive() {
+      rowsEl.querySelectorAll('.row.active').forEach((row) => {
         row.classList.remove('active');
-        const start = Number(row.dataset.startLine || 0);
-        const end = Number(row.dataset.endLine || start);
-        if (line >= start && line <= end) {
-          best = row;
-          bestDist = 0;
-        } else if (bestDist > 0) {
-          const dist = Math.min(Math.abs(line - start), Math.abs(line - end));
-          if (dist < bestDist && dist <= 2) {
-            best = row;
-            bestDist = dist;
-          }
-        }
       });
-      if (best) {
-        best.classList.add('active');
-        best.scrollIntoView({ block: 'nearest' });
-      }
     }
 
-    scrubEl.addEventListener('input', () => {
-      const time = Number(scrubEl.value) || 0;
-      scrubLabel.textContent = fmt(time) + 's';
-      vscode.postMessage({ type: 'scrub', time: time });
-    });
+    function setActiveRow(row) {
+      clearActive();
+      if (!row) return;
+      row.classList.add('active');
+      row.scrollIntoView({ block: 'nearest' });
+    }
+
+    function highlightLine(line) {
+      pendingHighlightLine = line;
+      pendingHighlightTime = null;
+      const rows = Array.from(rowsEl.querySelectorAll('.row'));
+      let best = null;
+      let bestScore = Infinity;
+      rows.forEach((row) => {
+        const start = Number(row.dataset.startLine || 0);
+        const end = Number(row.dataset.endLine || start);
+        const kind = row.dataset.kind || '';
+        if (!start && !end) return;
+        let dist;
+        if (line >= start && line <= end) {
+          dist = 0;
+        } else {
+          dist = Math.min(Math.abs(line - start), Math.abs(line - end));
+          if (dist > 3) return;
+        }
+        // Prefer play/wait over section markers at equal distance.
+        const kindPenalty = (kind === 'play' || kind === 'wait') ? 0 : 0.4;
+        const score = dist + kindPenalty;
+        if (score < bestScore) {
+          best = row;
+          bestScore = score;
+        }
+      });
+      setActiveRow(best);
+    }
+
+    function highlightTime(time) {
+      pendingHighlightTime = time;
+      const rows = Array.from(rowsEl.querySelectorAll('.row'));
+      let covering = null;
+      let lastStarted = null;
+      rows.forEach((row) => {
+        const kind = row.dataset.kind || '';
+        if (kind === 'next_section') return;
+        const start = Number(row.dataset.start || 0);
+        const dur = Number(row.dataset.duration || 0);
+        const end = start + dur;
+        if (time >= start && time <= end + 1e-9) covering = row;
+        if (time >= start) lastStarted = row;
+      });
+      setActiveRow(covering || lastStarted);
+    }
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
@@ -580,6 +912,8 @@ export class TimelinePanel {
         rebuild();
       } else if (msg && msg.type === 'highlightLine') {
         highlightLine(msg.line);
+      } else if (msg && msg.type === 'highlightTime') {
+        highlightTime(Number(msg.time) || 0);
       }
     });
     vscode.postMessage({ type: 'ready' });

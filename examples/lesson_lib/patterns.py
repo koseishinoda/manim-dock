@@ -1,4 +1,4 @@
-"""Reusable educational patterns (P01–P03, P06) as plain ManimCE helpers.
+"""Reusable educational patterns (P01–P03, P06–P10) as plain ManimCE helpers.
 
 These are normal Python functions — uninstall-safe, no Dock APIs.
 """
@@ -103,3 +103,93 @@ def two_column(
     scene.play(FadeIn(columns))
     scene.wait(wait)
     return columns
+
+
+def brace_callout(
+    scene: Scene,
+    mobject: Mobject,
+    text: str = "notice this",
+    *,
+    direction=DOWN,
+    color=ACCENT,
+    font_size: int = 28,
+    wait: float = DEFAULT_WAIT,
+    fade_out: bool = False,
+) -> VGroup:
+    """P07 — Brace + label callout under (or beside) a mobject."""
+    brace = Brace(mobject, direction=direction, color=color)
+    label = Text(text, font_size=font_size, color=color)
+    label.next_to(brace, direction, buff=0.15)
+    group = VGroup(brace, label)
+    scene.play(GrowFromCenter(brace), FadeIn(label))
+    scene.wait(wait)
+    if fade_out:
+        scene.play(FadeOut(group))
+    return group
+
+
+def axes_intro(
+    scene: Scene,
+    *,
+    x_range: tuple[float, float, float] = (-3, 3, 1),
+    y_range: tuple[float, float, float] = (-2, 2, 1),
+    use_number_plane: bool = True,
+    run_time: float = 1.2,
+    wait: float = DEFAULT_WAIT,
+) -> Mobject:
+    """P08 — NumberPlane or Axes intro via Create."""
+    if use_number_plane:
+        axes = NumberPlane(x_range=x_range, y_range=y_range)
+    else:
+        axes = Axes(x_range=x_range, y_range=y_range)
+    scene.play(Create(axes), run_time=run_time)
+    scene.wait(wait)
+    return axes
+
+
+def compare_cards(
+    scene: Scene,
+    left_title: str,
+    right_title: str,
+    *,
+    left_body: str = "…",
+    right_body: str = "…",
+    vs_text: str = "vs",
+    buff: float = 0.8,
+    wait: float = DEFAULT_WAIT,
+    fade_out: bool = False,
+) -> VGroup:
+    """P09 — side-by-side compare cards with a vs marker."""
+    left = VGroup(
+        Text(left_title, font_size=32),
+        Text(left_body, font_size=24),
+    ).arrange(DOWN, buff=0.2)
+    vs = Text(vs_text, font_size=28, color=ACCENT)
+    right = VGroup(
+        Text(right_title, font_size=32),
+        Text(right_body, font_size=24),
+    ).arrange(DOWN, buff=0.2)
+    row = VGroup(left, vs, right).arrange(RIGHT, buff=buff)
+    row.move_to(ORIGIN)
+    scene.play(FadeIn(row))
+    scene.wait(wait)
+    if fade_out:
+        scene.play(FadeOut(row))
+    return row
+
+
+def succession_beat(
+    scene: Scene,
+    *animations: Animation,
+    run_time: float | None = None,
+    wait: float = DEFAULT_WAIT,
+) -> None:
+    """P10 — play animations as a Succession beat."""
+    if not animations:
+        scene.wait(wait)
+        return
+    kwargs: dict = {}
+    if run_time is not None:
+        kwargs["run_time"] = run_time
+    scene.play(Succession(*animations), **kwargs)
+    scene.wait(wait)

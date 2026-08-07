@@ -99,6 +99,8 @@ export interface TimelineEvent {
   editable: boolean;
   duration_source: string;
   note: string;
+  /** Enclosing next_section label; empty before the first section. */
+  section?: string;
 }
 
 export interface SceneTimeline {
@@ -137,6 +139,33 @@ export interface ReorderPatchProposal {
 export interface RenderOptions {
   saveSections?: boolean;
   skipUntilSection?: string;
+  /** When set, rewrite construct to only call this method before render. */
+  method?: string;
+}
+
+export interface AlignItem {
+  name: string;
+  x: number;
+  y: number;
+}
+
+export interface AlignDelta {
+  name: string;
+  dx: number;
+  dy: number;
+}
+
+export interface ScrubPosition {
+  x: number;
+  y: number;
+  opacity: number;
+}
+
+export interface LibraryHelper {
+  name: string;
+  signature: string;
+  doc: string;
+  insert: string;
 }
 
 export interface ExtractProposal {
@@ -359,6 +388,10 @@ function renderInlineCode(
     opts?.skipUntilSection !== undefined && opts.skipUntilSection !== ""
       ? JSON.stringify(opts.skipUntilSection)
       : "None";
+  const method =
+    opts?.method !== undefined && opts.method !== ""
+      ? JSON.stringify(opts.method)
+      : "None";
   return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
@@ -369,6 +402,7 @@ print(json.dumps(render_scene(
     quality=${JSON.stringify(quality)},
     save_sections=${saveSections ? "True" : "False"},
     skip_until_section=${skipUntil},
+    method=${method},
 ).to_dict()))
 `.trim();
 }
@@ -442,6 +476,100 @@ print(json.dumps(propose_buff(
 `.trim();
 }
 
+function proposeFontSizeInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  name: string,
+  fontSize: number,
+  source: string,
+  anchorLine: number | undefined
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.patch_layout import propose_font_size
+print(json.dumps(propose_font_size(
+    ${JSON.stringify(source)},
+    path=${JSON.stringify(filePath)},
+    name=${JSON.stringify(name)},
+    font_size=${JSON.stringify(fontSize)},
+    anchor_line=${anchorLine === undefined ? "None" : JSON.stringify(anchorLine)},
+).to_dict()))
+`.trim();
+}
+
+function proposeLagRatioInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  name: string,
+  lagRatio: number,
+  source: string,
+  anchorLine: number | undefined
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.patch_layout import propose_lag_ratio
+print(json.dumps(propose_lag_ratio(
+    ${JSON.stringify(source)},
+    path=${JSON.stringify(filePath)},
+    name=${JSON.stringify(name)},
+    lag_ratio=${JSON.stringify(lagRatio)},
+    anchor_line=${anchorLine === undefined ? "None" : JSON.stringify(anchorLine)},
+).to_dict()))
+`.trim();
+}
+
+function alignDeltasInlineCode(
+  pythonRoot: string,
+  mode: string,
+  items: AlignItem[]
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.align import compute_align_deltas
+print(json.dumps({"deltas": compute_align_deltas(
+    ${JSON.stringify(items)},
+    ${JSON.stringify(mode)},
+)}))
+`.trim();
+}
+
+function scrubLayoutInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  sceneName: string,
+  activeUntilLine: number,
+  source: string | undefined
+): string {
+  const sourceArg =
+    source !== undefined ? JSON.stringify(source) : "None";
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.scrub import scrub_layout
+print(json.dumps(scrub_layout(
+    path=${JSON.stringify(filePath)},
+    scene=${JSON.stringify(sceneName)},
+    active_until_line=${JSON.stringify(activeUntilLine)},
+    source=${sourceArg},
+)))
+`.trim();
+}
+
+function libraryCatalogInlineCode(
+  pythonRoot: string,
+  libraryPath: string
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.library_catalog import list_library_helpers
+print(json.dumps({"ok": True, "helpers": list_library_helpers(${JSON.stringify(libraryPath)})}))
+`.trim();
+}
+
 function proposeScaleInlineCode(
   pythonRoot: string,
   filePath: string,
@@ -476,6 +604,26 @@ import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
 from manim_dock.patch_timing import propose_reorder
 print(json.dumps(propose_reorder(
+    ${JSON.stringify(source)},
+    path=${JSON.stringify(filePath)},
+    line_a=${JSON.stringify(lineA)},
+    line_b=${JSON.stringify(lineB)},
+).to_dict()))
+`.trim();
+}
+
+function proposeSectionReorderInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  lineA: number,
+  lineB: number,
+  source: string
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.patch_timing import propose_section_reorder
+print(json.dumps(propose_section_reorder(
     ${JSON.stringify(source)},
     path=${JSON.stringify(filePath)},
     line_a=${JSON.stringify(lineA)},
@@ -710,6 +858,161 @@ export class SidecarClient {
     throw new Error(`propose_buff failed:\n${errors.join("\n")}`);
   }
 
+  async proposeFontSize(
+    filePath: string,
+    name: string,
+    fontSize: number,
+    source: string,
+    anchorLine?: number
+  ): Promise<PatchProposal> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<PatchProposal>(bin, [
+            "-c",
+            proposeFontSizeInlineCode(
+              root,
+              filePath,
+              name,
+              fontSize,
+              source,
+              anchorLine
+            ),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`propose_font_size failed:\n${errors.join("\n")}`);
+  }
+
+  async proposeLagRatio(
+    filePath: string,
+    name: string,
+    lagRatio: number,
+    source: string,
+    anchorLine?: number
+  ): Promise<PatchProposal> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<PatchProposal>(bin, [
+            "-c",
+            proposeLagRatioInlineCode(
+              root,
+              filePath,
+              name,
+              lagRatio,
+              source,
+              anchorLine
+            ),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`propose_lag_ratio failed:\n${errors.join("\n")}`);
+  }
+
+  async alignDeltas(
+    mode: string,
+    items: AlignItem[]
+  ): Promise<AlignDelta[]> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          const result = await runPythonJson<{ deltas: AlignDelta[] }>(bin, [
+            "-c",
+            alignDeltasInlineCode(root, mode, items),
+          ]);
+          return result.deltas ?? [];
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`align_deltas failed:\n${errors.join("\n")}`);
+  }
+
+  async scrubLayout(
+    filePath: string,
+    sceneName: string,
+    activeUntilLine: number,
+    source?: string
+  ): Promise<Record<string, ScrubPosition>> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          const result = await runPythonJson<{
+            positions: Record<string, ScrubPosition>;
+          }>(bin, [
+            "-c",
+            scrubLayoutInlineCode(
+              root,
+              filePath,
+              sceneName,
+              activeUntilLine,
+              source
+            ),
+          ]);
+          return result.positions ?? {};
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`scrub_layout failed:\n${errors.join("\n")}`);
+  }
+
+  async libraryCatalog(libraryPath: string): Promise<LibraryHelper[]> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          const result = await runPythonJson<{
+            ok: boolean;
+            helpers: LibraryHelper[];
+          }>(bin, ["-c", libraryCatalogInlineCode(root, libraryPath)]);
+          return result.helpers ?? [];
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`library_catalog failed:\n${errors.join("\n")}`);
+  }
+
   async proposeScale(
     filePath: string,
     name: string,
@@ -770,6 +1073,33 @@ export class SidecarClient {
       }
     }
     throw new Error(`propose_reorder failed:\n${errors.join("\n")}`);
+  }
+
+  async proposeSectionReorder(
+    filePath: string,
+    lineA: number,
+    lineB: number,
+    source: string
+  ): Promise<ReorderPatchProposal> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<ReorderPatchProposal>(bin, [
+            "-c",
+            proposeSectionReorderInlineCode(root, filePath, lineA, lineB, source),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`propose_section_reorder failed:\n${errors.join("\n")}`);
   }
 
   async timeline(

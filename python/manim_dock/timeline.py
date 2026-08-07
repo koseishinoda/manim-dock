@@ -28,6 +28,7 @@ class TimelineEvent:
     editable: bool
     duration_source: str  # literal | constant | default | unknown
     note: str = ""
+    section: str = ""  # enclosing next_section label; "" before first section
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +42,7 @@ class TimelineEvent:
             "editable": self.editable,
             "duration_source": self.duration_source,
             "note": self.note,
+            "section": self.section,
         }
 
 
@@ -186,6 +188,7 @@ def _expand_method(
     t: float,
     counter: list[int],
     stack: set[str],
+    current_section: list[str],
 ) -> float:
     if method_name in stack:
         return t
@@ -204,6 +207,7 @@ def _expand_method(
                 rng = _line_range(call)
                 if name == "next_section":
                     label = _section_label(call)
+                    current_section[0] = label
                     events.append(
                         TimelineEvent(
                             id=eid,
@@ -216,6 +220,7 @@ def _expand_method(
                             editable=False,
                             duration_source="n/a",
                             note="section marker",
+                            section=label,
                         )
                     )
                 elif name == "wait":
@@ -237,6 +242,7 @@ def _expand_method(
                             editable=editable,
                             duration_source=source,
                             note=note,
+                            section=current_section[0],
                         )
                     )
                     t += dur
@@ -265,13 +271,21 @@ def _expand_method(
                             editable=editable,
                             duration_source=source,
                             note=note,
+                            section=current_section[0],
                         )
                     )
                     t += dur
             elif name in methods and name not in stack:
                 # Helper beat: self.title_card()
                 t = _expand_method(
-                    name, methods, constants, events, t, counter, stack
+                    name,
+                    methods,
+                    constants,
+                    events,
+                    t,
+                    counter,
+                    stack,
+                    current_section,
                 )
     finally:
         stack.discard(method_name)
@@ -303,7 +317,7 @@ def parse_scene_timeline(source: str, path: str, scene_name: str) -> SceneTimeli
 
     events: list[TimelineEvent] = []
     total = _expand_method(
-        "construct", methods, constants, events, 0.0, [0], set()
+        "construct", methods, constants, events, 0.0, [0], set(), [""]
     )
     result.events = events
     result.total_duration = total

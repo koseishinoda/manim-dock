@@ -309,12 +309,36 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
   }
 }
 
-export async function revealRange(filePath: string, range: SourceRange): Promise<void> {
+export async function revealRange(
+  filePath: string,
+  range: SourceRange,
+  options?: { preserveFocus?: boolean; preview?: boolean }
+): Promise<void> {
   const doc = await vscode.workspace.openTextDocument(filePath);
-  const editor = await vscode.window.showTextDocument(doc, { preview: false });
+  // Prefer an existing text-editor column for this file so Stage/Timeline
+  // webviews are not replaced when selection sync jumps to source.
+  let column: vscode.ViewColumn | undefined;
+  for (const ed of vscode.window.visibleTextEditors) {
+    if (ed.document.uri.fsPath === filePath && ed.viewColumn != null) {
+      column = ed.viewColumn;
+      break;
+    }
+  }
+  if (column == null) {
+    column =
+      vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+  }
+  const editor = await vscode.window.showTextDocument(doc, {
+    viewColumn: column,
+    preserveFocus: options?.preserveFocus ?? false,
+    preview: options?.preview ?? true,
+  });
   const start = new vscode.Position(Math.max(0, range.start_line - 1), 0);
   const endLine = Math.max(range.start_line, range.end_line) - 1;
   const end = doc.lineAt(Math.min(endLine, doc.lineCount - 1)).range.end;
   editor.selection = new vscode.Selection(start, start);
-  editor.revealRange(new vscode.Range(start, end), vscode.TextEditorRevealType.InCenter);
+  editor.revealRange(
+    new vscode.Range(start, end),
+    vscode.TextEditorRevealType.InCenter
+  );
 }

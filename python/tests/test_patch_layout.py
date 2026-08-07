@@ -1,5 +1,7 @@
 from manim_dock.patch_layout import (
     propose_buff,
+    propose_font_size,
+    propose_lag_ratio,
     propose_scale,
     propose_shift,
     shift_expr_code,
@@ -50,7 +52,7 @@ def test_propose_insert_shift():
     assert prop.diff
 
 
-def test_propose_stacks_additional_shift():
+def test_propose_coalesces_additional_shift():
     source = SAMPLE.replace(
         "        title.to_edge(UP)\n",
         "        title.to_edge(UP)\n        title.shift(RIGHT * 0.1)\n",
@@ -59,9 +61,25 @@ def test_propose_stacks_additional_shift():
         source, path="demo.py", name="title", dx=0.75, dy=0.0, anchor_line=6
     )
     assert prop.ok, prop.error
-    assert prop.summary.startswith("insert")
-    assert "title.shift(RIGHT * 0.1)" in prop.proposed
-    assert "title.shift(RIGHT * 0.75)" in prop.proposed
+    assert prop.summary.startswith("coalesce")
+    assert "title.shift(RIGHT * 0.85)" in prop.proposed
+    assert "title.shift(RIGHT * 0.1)" not in prop.proposed
+    assert prop.proposed.count("title.shift(") == 1
+
+
+def test_propose_coalesces_stacked_shifts():
+    source = SAMPLE.replace(
+        "        title.to_edge(UP)\n",
+        "        title.to_edge(UP)\n"
+        "        title.shift(LEFT * 6.6111)\n"
+        "        title.shift(RIGHT * 0.2478 + DOWN * 3.5929)\n",
+    )
+    prop = propose_shift(
+        source, path="demo.py", name="title", dx=0.1239, dy=1.0841, anchor_line=6
+    )
+    assert prop.ok, prop.error
+    assert prop.proposed.count("title.shift(") == 1
+    assert "title.shift(LEFT * 6.2394 + DOWN * 2.5088)" in prop.proposed
 
 
 def test_unknown_name_fails():
@@ -133,3 +151,96 @@ def test_propose_scale_rejects_one_and_nonpositive():
     assert not propose_scale(SAMPLE, path="demo.py", name="title", factor=1.0).ok
     assert not propose_scale(SAMPLE, path="demo.py", name="title", factor=0.0).ok
     assert not propose_scale(SAMPLE, path="demo.py", name="title", factor=-2.0).ok
+
+
+FONT_SIZE_SAMPLE = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        title = Text("Hello", font_size=40)
+        title.to_edge(UP)
+'''
+
+LAGGED_SAMPLE = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        steps = VGroup(Text("1"), Text("2")).arrange(DOWN)
+        self.play(LaggedStart(*[FadeIn(s, shift=RIGHT * 0.2) for s in steps], lag_ratio=0.35))
+'''
+
+
+def test_propose_font_size_updates_literal():
+    prop = propose_font_size(
+        FONT_SIZE_SAMPLE, path="demo.py", name="title", font_size=48
+    )
+    assert prop.ok, prop.error
+    assert "font_size=48" in prop.proposed
+    assert "font_size=40" not in prop.proposed
+    assert "set title font_size" in prop.summary
+
+
+def test_propose_font_size_inserts_when_missing():
+    prop = propose_font_size(SAMPLE, path="demo.py", name="title", font_size=36)
+    assert prop.ok, prop.error
+    assert "font_size=36" in prop.proposed
+    assert 'Text("Hello"' in prop.proposed
+
+
+def test_propose_font_size_on_mathtex():
+    source = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        eq = MathTex("a^2", font_size=40)
+'''
+    prop = propose_font_size(source, path="demo.py", name="eq", font_size=56)
+    assert prop.ok, prop.error
+    assert "font_size=56" in prop.proposed
+
+
+def test_propose_font_size_chained_ctor():
+    source = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        title = Text("Hi", font_size=40).to_edge(UP)
+'''
+    prop = propose_font_size(source, path="demo.py", name="title", font_size=28)
+    assert prop.ok, prop.error
+    assert "font_size=28" in prop.proposed
+    assert ".to_edge(UP)" in prop.proposed
+
+
+def test_propose_lag_ratio_updates_literal():
+    prop = propose_lag_ratio(
+        LAGGED_SAMPLE, path="demo.py", name="steps", lag_ratio=0.5
+    )
+    assert prop.ok, prop.error
+    assert "lag_ratio=0.5" in prop.proposed
+    assert "lag_ratio=0.35" not in prop.proposed
+    assert "set steps lag_ratio" in prop.summary
+
+
+def test_propose_lag_ratio_inserts_when_missing():
+    source = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        steps = VGroup(Text("1"), Text("2"))
+        self.play(LaggedStart(*[FadeIn(s) for s in steps]))
+'''
+    prop = propose_lag_ratio(source, path="demo.py", name="steps", lag_ratio=0.2)
+    assert prop.ok, prop.error
+    assert "lag_ratio=0.2" in prop.proposed
+
+
+def test_propose_lag_ratio_no_site_fails():
+    prop = propose_lag_ratio(SAMPLE, path="demo.py", name="title", lag_ratio=0.2)
+    assert not prop.ok
+    assert "no LaggedStart" in (prop.error or "")

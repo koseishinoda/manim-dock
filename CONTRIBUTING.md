@@ -7,6 +7,7 @@ Thanks for helping. Keep the [invasion test](docs/invasion-test.md) green.
 1. Python sidecar: `cd python && python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"`
 2. Extension: `npm install && npm run compile`
 3. Launch **Run Manim Dock Extension** from the debug panel
+4. Optional package check: `npm run package` (must include `python/manim_dock`, `media/konva.min.js`, `templates/`, `snippets/`)
 
 ## Project agents
 

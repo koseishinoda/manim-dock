@@ -7,8 +7,12 @@ from .patterns import (
     ACCENT,
     DEFAULT_WAIT,
     PRIMARY,
+    axes_intro,
+    brace_callout,
+    compare_cards,
     definition_card,
     step_list,
+    succession_beat,
     title_card,
     two_column,
 )
@@ -21,4 +25,8 @@ __all__ = [
     "definition_card",
     "step_list",
     "two_column",
+    "brace_callout",
+    "axes_intro",
+    "compare_cards",
+    "succession_beat",
 ]

@@ -222,6 +222,90 @@ def _apply_skip_until_section(source: str, section_name: str) -> str:
     return updated.code
 
 
+class _ConstructOnlyMethodTransformer(cst.CSTTransformer):
+    """Rewrite ``Scene.construct`` body to ``self.<method>()``; keep other methods."""
+
+    def __init__(self, scene_name: str, method_name: str) -> None:
+        self.scene_name = scene_name
+        self.method_name = method_name
+        self.found_scene = False
+        self.found_method = False
+        self.rewrote_construct = False
+
+    def leave_ClassDef(
+        self, original_node: cst.ClassDef, updated_node: cst.ClassDef
+    ) -> cst.ClassDef:
+        if updated_node.name.value != self.scene_name:
+            return updated_node
+        self.found_scene = True
+        body = updated_node.body
+        if not isinstance(body, cst.IndentedBlock):
+            return updated_node
+
+        new_stmts: list[cst.BaseStatement] = []
+        for stmt in body.body:
+            if isinstance(stmt, cst.FunctionDef):
+                if stmt.name.value == self.method_name:
+                    self.found_method = True
+                if stmt.name.value == "construct":
+                    call = cst.parse_statement(f"self.{self.method_name}()\n")
+                    stmt = stmt.with_changes(
+                        body=cst.IndentedBlock(body=[call])
+                    )
+                    self.rewrote_construct = True
+            new_stmts.append(stmt)
+
+        return updated_node.with_changes(
+            body=body.with_changes(body=new_stmts)
+        )
+
+
+def _construct_only_method(
+    source: str, scene_name: str, method_name: str
+) -> str:
+    """Rewrite ``scene_name.construct`` to only call ``self.<method_name>()``.
+
+    Other methods on the class are preserved. Raises ``ValueError`` if the
+    scene, ``construct``, or target method is missing, or if ``method_name``
+    is empty / ``construct``.
+    """
+    if not scene_name:
+        raise ValueError("scene_name must be non-empty")
+    if not method_name:
+        raise ValueError("method_name must be non-empty")
+    if method_name == "construct":
+        raise ValueError("method_name cannot be 'construct'")
+
+    module = cst.parse_module(source)
+    transformer = _ConstructOnlyMethodTransformer(scene_name, method_name)
+    updated = module.visit(transformer)
+    if not transformer.found_scene:
+        raise ValueError(f"scene not found: {scene_name!r}")
+    if not transformer.found_method:
+        raise ValueError(f"method not found: {method_name!r}")
+    if not transformer.rewrote_construct:
+        raise ValueError(f"construct not found on scene {scene_name!r}")
+    return updated.code
+
+
+def _write_temp_render_source(
+    cwd: Path, path: Path, transformed: str, *, prefix_tag: str
+) -> Path:
+    """Write a hidden temp sibling file so imports resolve; return its path."""
+    fd, tmp_name = tempfile.mkstemp(
+        suffix=path.suffix or ".py",
+        prefix=f".{path.stem}_{prefix_tag}_",
+        dir=str(cwd),
+    )
+    try:
+        with open(fd, "w", encoding="utf-8") as handle:
+            handle.write(transformed)
+    except Exception:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+    return Path(tmp_name)
+
+
 def render_scene(
     file_path: str | Path,
     scene_name: str,
@@ -232,6 +316,7 @@ def render_scene(
     timeout: int | None = 600,
     save_sections: bool = False,
     skip_until_section: str | None = None,
+    method: str | None = None,
 ) -> RenderResult:
     path = Path(file_path).resolve()
     if not path.is_file():
@@ -241,31 +326,38 @@ def render_scene(
     render_path = path
     temp_path: Path | None = None
 
-    if skip_until_section:
+    if method or skip_until_section:
         try:
             source = path.read_text(encoding="utf-8")
-            transformed = _apply_skip_until_section(source, skip_until_section)
+            transformed = source
+            if method:
+                transformed = _construct_only_method(
+                    transformed, scene_name, method
+                )
+            if skip_until_section:
+                transformed = _apply_skip_until_section(
+                    transformed, skip_until_section
+                )
         except ValueError as exc:
             return RenderResult(ok=False, error=str(exc), cwd=str(cwd))
         except Exception as exc:  # noqa: BLE001 — surface parse failures
+            kind = "method" if method else "skip_until_section"
             return RenderResult(
                 ok=False,
-                error=f"skip_until_section transform failed: {exc}",
+                error=f"{kind} transform failed: {exc}",
                 cwd=str(cwd),
             )
-        # Same directory so sibling imports resolve; hidden temp basename.
-        fd, tmp_name = tempfile.mkstemp(
-            suffix=path.suffix or ".py",
-            prefix=f".{path.stem}_skip_",
-            dir=str(cwd),
-        )
+        tag = "method" if method else "skip"
         try:
-            with open(fd, "w", encoding="utf-8") as handle:
-                handle.write(transformed)
-        except Exception:
-            Path(tmp_name).unlink(missing_ok=True)
-            raise
-        temp_path = Path(tmp_name)
+            temp_path = _write_temp_render_source(
+                cwd, path, transformed, prefix_tag=tag
+            )
+        except Exception as exc:  # noqa: BLE001
+            return RenderResult(
+                ok=False,
+                error=f"failed to write temp render file: {exc}",
+                cwd=str(cwd),
+            )
         render_path = temp_path
 
     cmd = list(manim_cmd or resolve_manim_cmd())
