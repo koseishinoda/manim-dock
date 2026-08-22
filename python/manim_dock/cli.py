@@ -19,6 +19,10 @@ from manim_dock.patch_layout import (
     propose_scale_file,
     propose_shift_file,
 )
+from manim_dock.patch_insert import (
+    propose_insert_play_file,
+    propose_insert_wait_file,
+)
 from manim_dock.patch_timing import (
     propose_duration_file,
     propose_reorder_file,
@@ -174,6 +178,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     section_reorder_p.add_argument(
         "line_b", type=int, help="1-based start line of second next_section"
+    )
+
+    insert_wait_p = sub.add_parser(
+        "propose-insert-wait",
+        help="Propose inserting self.wait(...) after a statement (no write)",
+    )
+    insert_wait_p.add_argument("path", help="Path to a .py scene file")
+    insert_wait_p.add_argument(
+        "after_line",
+        type=int,
+        help="1-based start line of the statement to insert after",
+    )
+    insert_wait_p.add_argument(
+        "--duration",
+        type=float,
+        default=0.5,
+        help="Wait duration seconds (default: 0.5)",
+    )
+
+    insert_play_p = sub.add_parser(
+        "propose-insert-play",
+        help="Propose inserting self.play(...) scaffold after a statement (no write)",
+    )
+    insert_play_p.add_argument("path", help="Path to a .py scene file")
+    insert_play_p.add_argument(
+        "after_line",
+        type=int,
+        help="1-based start line of the statement to insert after",
+    )
+    insert_play_p.add_argument(
+        "--anim-code",
+        default="FadeIn(Dot())",
+        help='Animation expression inside self.play(...) (default: FadeIn(Dot()))',
     )
 
     extract_p = sub.add_parser(
@@ -346,6 +383,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "propose-section-reorder":
         data = propose_section_reorder_file(
             args.path, args.line_a, args.line_b
+        ).to_dict()
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "propose-insert-wait":
+        data = propose_insert_wait_file(
+            args.path, args.after_line, args.duration
+        ).to_dict()
+        if data.get("ok"):
+            data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}
+            data["proposed_omitted"] = True
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0 if data.get("ok") else 1
+
+    if args.command == "propose-insert-play":
+        data = propose_insert_play_file(
+            args.path, args.after_line, args.anim_code
         ).to_dict()
         if data.get("ok"):
             data = {k: v for k, v in data.items() if k not in {"original", "proposed"}}

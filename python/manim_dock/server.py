@@ -25,6 +25,10 @@ from manim_dock.patch_layout import (
     propose_scale_file,
     propose_shift_file,
 )
+from manim_dock.patch_insert import (
+    propose_insert_play_file,
+    propose_insert_wait_file,
+)
 from manim_dock.patch_timing import (
     propose_duration_file,
     propose_reorder_file,
@@ -256,6 +260,44 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
             ).to_dict()
         return propose_section_reorder_file(
             str(path), int(line_a), int(line_b)
+        ).to_dict()
+    if method == "propose_insert_wait":
+        path = params.get("path")
+        after_line = params.get("after_line")
+        if not path or after_line is None:
+            raise ValueError("params.path and params.after_line are required")
+        duration = float(params.get("duration") if params.get("duration") is not None else 0.5)
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_insert import propose_insert_wait
+
+            return propose_insert_wait(
+                source,
+                path=str(path),
+                after_line=int(after_line),
+                duration=duration,
+            ).to_dict()
+        return propose_insert_wait_file(
+            str(path), int(after_line), duration
+        ).to_dict()
+    if method == "propose_insert_play":
+        path = params.get("path")
+        after_line = params.get("after_line")
+        if not path or after_line is None:
+            raise ValueError("params.path and params.after_line are required")
+        anim_code = str(params.get("anim_code") or "FadeIn(Dot())")
+        source = params.get("source")
+        if isinstance(source, str):
+            from manim_dock.patch_insert import propose_insert_play
+
+            return propose_insert_play(
+                source,
+                path=str(path),
+                after_line=int(after_line),
+                anim_code=anim_code,
+            ).to_dict()
+        return propose_insert_play_file(
+            str(path), int(after_line), anim_code
         ).to_dict()
     if method == "extract_method":
         path = params.get("path")

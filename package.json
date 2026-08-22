@@ -125,6 +125,19 @@
       {
         "command": "manimDock.debugSidecar",
         "title": "Manim Dock: Debug Sidecar"
+      },
+      {
+        "command": "manimDock.insertWait",
+        "title": "Manim Dock: Insert Wait"
+      },
+      {
+        "command": "manimDock.insertPlay",
+        "title": "Manim Dock: Insert Play Scaffold"
+      },
+      {
+        "command": "manimDock.openInSideview",
+        "title": "Manim Dock: Open in Sideview",
+        "icon": "$(open-preview)"
       }
     ],
     "menus": {
@@ -237,6 +250,15 @@
         },
         {
           "command": "manimDock.renderMethod"
+        },
+        {
+          "command": "manimDock.insertWait"
+        },
+        {
+          "command": "manimDock.insertPlay"
+        },
+        {
+          "command": "manimDock.openInSideview"
         }
       ],
       "editor/title": [
@@ -277,6 +299,11 @@
         },
         {
           "command": "manimDock.renderMethod",
+          "when": "resourceLangId == python",
+          "group": "1_manimDock"
+        },
+        {
+          "command": "manimDock.openInSideview",
           "when": "resourceLangId == python",
           "group": "1_manimDock"
         }

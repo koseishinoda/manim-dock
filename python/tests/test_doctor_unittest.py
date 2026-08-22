@@ -9,6 +9,7 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("python", probes)
         self.assertTrue(probes["python"].ok)
         self.assertIn("manim", probes)
+        self.assertIn("manim_support", probes)
         self.assertIn("latex", probes)
         self.assertIn("ffmpeg", probes)
 

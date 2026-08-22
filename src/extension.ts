@@ -7,12 +7,17 @@ import {
   OutlineProvider,
   revealRange,
 } from "./outlineTree";
-import { ProposedPatchProvider } from "./patchConfirm";
+import { confirmAndApplyPatch, ProposedPatchProvider } from "./patchConfirm";
 import { PreviewPanel } from "./previewPanel";
 import { PropertiesPanel } from "./propertiesPanel";
 import { RenderOptions, SidecarClient, SourceRange } from "./sidecar";
 import { StagePanel } from "./stagePanel";
 import { TimelinePanel } from "./timelinePanel";
+
+const SIDEVIEW_EXT_ID = "Rickaym.manim-sideview";
+const SIDEVIEW_RUN_CMD = "manim-sideview.run";
+const SIDEVIEW_MARKETPLACE =
+  "https://marketplace.visualstudio.com/items?itemName=Rickaym.manim-sideview";
 
 export function activate(context: vscode.ExtensionContext): void {
   const sidecar = new SidecarClient(context.extensionPath);
@@ -196,6 +201,15 @@ export function activate(context: vscode.ExtensionContext): void {
         await renderMethodCommand(sidecar, outlineProvider, output, item);
       }
     ),
+    vscode.commands.registerCommand("manimDock.insertWait", async () => {
+      await insertWaitCommand(context, sidecar, output);
+    }),
+    vscode.commands.registerCommand("manimDock.insertPlay", async () => {
+      await insertPlayCommand(context, sidecar, output);
+    }),
+    vscode.commands.registerCommand("manimDock.openInSideview", async () => {
+      await openInSideviewCommand();
+    }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor?.document.languageId === "python") {
         outlineProvider.refresh();
@@ -223,6 +237,193 @@ function syncSurfacesToEditor(editor: vscode.TextEditor): void {
   const line = editor.selection.active.line + 1; // 1-based for sidecar ranges
   StagePanel.highlightLine(filePath, line);
   TimelinePanel.highlightLine(filePath, line);
+}
+
+function resolveInsertTarget():
+  | { filePath: string; afterLine: number }
+  | undefined {
+  const timelinePath = TimelinePanel.openFilePath();
+  const selected = TimelinePanel.selectedAfterLine();
+  if (timelinePath && selected && selected > 0) {
+    return { filePath: timelinePath, afterLine: selected };
+  }
+  const editor = vscode.window.activeTextEditor;
+  if (editor && editor.document.languageId === "python") {
+    return {
+      filePath: editor.document.uri.fsPath,
+      afterLine: editor.selection.active.line + 1,
+    };
+  }
+  return undefined;
+}
+
+async function insertWaitCommand(
+  context: vscode.ExtensionContext,
+  sidecar: SidecarClient,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const target = resolveInsertTarget();
+  if (!target) {
+    void vscode.window.showWarningMessage(
+      "Manim Dock: select a Timeline beat or place the cursor on a Python statement, then Insert Wait."
+    );
+    return;
+  }
+  // Prefer Timeline path when open for this file (keeps selection + refresh).
+  if (
+    TimelinePanel.openFilePath() === target.filePath &&
+    TimelinePanel.selectedAfterLine()
+  ) {
+    await TimelinePanel.insertWaitFromCommand(0.5, target.afterLine);
+    return;
+  }
+
+  const doc = await vscode.workspace.openTextDocument(target.filePath);
+  let proposal;
+  try {
+    proposal = await sidecar.proposeInsertWait(
+      target.filePath,
+      target.afterLine,
+      0.5,
+      doc.getText()
+    );
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `Manim Dock insert wait failed: ${String(err)}`
+    );
+    return;
+  }
+  if (!proposal.ok) {
+    void vscode.window.showWarningMessage(
+      `Manim Dock: could not insert wait: ${proposal.error ?? "unknown"}`
+    );
+    return;
+  }
+  await confirmAndApplyPatch(
+    context,
+    {
+      path: target.filePath,
+      original: proposal.original,
+      proposed: proposal.proposed,
+      summary: proposal.summary,
+      diff: proposal.diff,
+    },
+    output,
+    "timeline"
+  );
+  TimelinePanel.refreshIfOpen(target.filePath);
+}
+
+async function insertPlayCommand(
+  context: vscode.ExtensionContext,
+  sidecar: SidecarClient,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const target = resolveInsertTarget();
+  if (!target) {
+    void vscode.window.showWarningMessage(
+      "Manim Dock: select a Timeline beat or place the cursor on a Python statement, then Insert Play."
+    );
+    return;
+  }
+  const typed = await vscode.window.showInputBox({
+    title: "Manim Dock: Insert play scaffold",
+    prompt: "Animation expression inside self.play(...)",
+    value: "FadeIn(Dot())",
+  });
+  if (typed === undefined) {
+    return;
+  }
+  const animCode = typed.trim() || "FadeIn(Dot())";
+
+  if (
+    TimelinePanel.openFilePath() === target.filePath &&
+    TimelinePanel.selectedAfterLine()
+  ) {
+    await TimelinePanel.insertPlayFromCommand(animCode, target.afterLine);
+    return;
+  }
+
+  const doc = await vscode.workspace.openTextDocument(target.filePath);
+  let proposal;
+  try {
+    proposal = await sidecar.proposeInsertPlay(
+      target.filePath,
+      target.afterLine,
+      animCode,
+      doc.getText()
+    );
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `Manim Dock insert play failed: ${String(err)}`
+    );
+    return;
+  }
+  if (!proposal.ok) {
+    void vscode.window.showWarningMessage(
+      `Manim Dock: could not insert play: ${proposal.error ?? "unknown"}`
+    );
+    return;
+  }
+  await confirmAndApplyPatch(
+    context,
+    {
+      path: target.filePath,
+      original: proposal.original,
+      proposed: proposal.proposed,
+      summary: proposal.summary,
+      diff: proposal.diff,
+    },
+    output,
+    "timeline"
+  );
+  TimelinePanel.refreshIfOpen(target.filePath);
+}
+
+async function openInSideviewCommand(): Promise<void> {
+  const ext = vscode.extensions.getExtension(SIDEVIEW_EXT_ID);
+  if (!ext) {
+    const pick = await vscode.window.showInformationMessage(
+      "Manim Sideview is not installed. Install it for a richer Manim preview player (Dock keeps Stage + Timeline).",
+      "Open Marketplace",
+      "Dismiss"
+    );
+    if (pick === "Open Marketplace") {
+      await vscode.env.openExternal(vscode.Uri.parse(SIDEVIEW_MARKETPLACE));
+    }
+    return;
+  }
+
+  if (!ext.isActive) {
+    try {
+      await ext.activate();
+    } catch (err) {
+      void vscode.window.showWarningMessage(
+        `Manim Dock: could not activate Sideview: ${String(err)}`
+      );
+    }
+  }
+
+  const editor = vscode.window.activeTextEditor;
+  if (editor?.document.languageId === "python") {
+    // Ensure Sideview sees the current file as active.
+    await vscode.window.showTextDocument(editor.document, {
+      preserveFocus: false,
+      preview: false,
+    });
+  } else {
+    void vscode.window.showInformationMessage(
+      "Manim Dock: open a Python scene file, then run Open in Sideview again."
+    );
+  }
+
+  try {
+    await vscode.commands.executeCommand(SIDEVIEW_RUN_CMD);
+  } catch {
+    void vscode.window.showInformationMessage(
+      `Manim Sideview is installed. Run “Manim: Runs a Sideview” (${SIDEVIEW_RUN_CMD}) from the Command Palette to preview the current scene.`
+    );
+  }
 }
 
 async function resolveSceneTarget(

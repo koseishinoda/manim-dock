@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 (Unreleased)
+
+V3 — Stage fidelity, Timeline insert, Sideview handoff, doctor matrix (see [docs/v3-roadmap.md](docs/v3-roadmap.md)):
+
+- Stage layout: ctor-chain unwrap; approximate `next_to` / light `arrange` heuristics
+- Timeline / commands: **Insert Wait**, **Insert Play Scaffold** (libcst confirm-diff)
+- **Open in Sideview** handoff (`manim-sideview.run` or Marketplace hint)
+- Doctor: `manim_support` probe (declared ManimCE range + detected version)
+
 ## 0.0.2
 
 Phase 6–8 (trust, deeper layout/timing, facilitation) + validation hardening:

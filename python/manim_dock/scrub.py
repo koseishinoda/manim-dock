@@ -92,12 +92,17 @@ def scrub_positions(
             tree = None
 
     result: dict[str, dict[str, float]] = {}
-    for name, start_line, calls in _iter_items(layout):
+    known: dict[str, tuple[float, float]] = {}
+    ordered = sorted(_iter_items(layout), key=lambda e: (e[1], e[0]))
+    for name, start_line, calls in ordered:
         active_calls = [c for c in calls if _call_end_line(c) <= active_until_line]
         if tree is not None:
-            x, y = _estimate_from_calls(name, active_calls, tree)
+            x, y = _estimate_from_calls(
+                name, active_calls, tree, known_positions=known
+            )
         else:
             x, y = 0.0, 0.0
+        known[name] = (x, y)
         opacity = 1.0 if start_line <= active_until_line else 0.35
         result[name] = {"x": float(x), "y": float(y), "opacity": opacity}
     return result

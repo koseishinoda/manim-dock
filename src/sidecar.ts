@@ -136,6 +136,20 @@ export interface ReorderPatchProposal {
   summary: string;
 }
 
+export interface InsertPatchProposal {
+  ok: boolean;
+  path: string;
+  kind: string;
+  after_line: number;
+  original: string;
+  proposed: string;
+  diff: string;
+  error: string | null;
+  summary: string;
+  duration?: number | null;
+  anim_code?: string | null;
+}
+
 export interface RenderOptions {
   saveSections?: boolean;
   skipUntilSection?: string;
@@ -677,6 +691,46 @@ print(json.dumps(propose_duration(
 `.trim();
 }
 
+function proposeInsertWaitInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  afterLine: number,
+  duration: number,
+  source: string
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.patch_insert import propose_insert_wait
+print(json.dumps(propose_insert_wait(
+    ${JSON.stringify(source)},
+    path=${JSON.stringify(filePath)},
+    after_line=${JSON.stringify(afterLine)},
+    duration=${JSON.stringify(duration)},
+).to_dict()))
+`.trim();
+}
+
+function proposeInsertPlayInlineCode(
+  pythonRoot: string,
+  filePath: string,
+  afterLine: number,
+  animCode: string,
+  source: string
+): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.patch_insert import propose_insert_play
+print(json.dumps(propose_insert_play(
+    ${JSON.stringify(source)},
+    path=${JSON.stringify(filePath)},
+    after_line=${JSON.stringify(afterLine)},
+    anim_code=${JSON.stringify(animCode)},
+).to_dict()))
+`.trim();
+}
+
 function extractMethodInlineCode(
   pythonRoot: string,
   filePath: string,
@@ -1161,6 +1215,72 @@ export class SidecarClient {
       }
     }
     throw new Error(`propose_duration failed:\n${errors.join("\n")}`);
+  }
+
+  async proposeInsertWait(
+    filePath: string,
+    afterLine: number,
+    duration: number,
+    source: string
+  ): Promise<InsertPatchProposal> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<InsertPatchProposal>(bin, [
+            "-c",
+            proposeInsertWaitInlineCode(
+              root,
+              filePath,
+              afterLine,
+              duration,
+              source
+            ),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`propose_insert_wait failed:\n${errors.join("\n")}`);
+  }
+
+  async proposeInsertPlay(
+    filePath: string,
+    afterLine: number,
+    animCode: string,
+    source: string
+  ): Promise<InsertPatchProposal> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins();
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<InsertPatchProposal>(bin, [
+            "-c",
+            proposeInsertPlayInlineCode(
+              root,
+              filePath,
+              afterLine,
+              animCode,
+              source
+            ),
+          ]);
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`propose_insert_play failed:\n${errors.join("\n")}`);
   }
 
   async extractMethod(

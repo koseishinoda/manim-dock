@@ -18,6 +18,8 @@ export class TimelinePanel {
   private sceneName: string | undefined;
   private timeline: SceneTimeline | undefined;
   private lastScrubTime = 0;
+  /** 1-based start line of the last selected beat / section (for insert). */
+  private selectedAfterLine: number | undefined;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -113,6 +115,49 @@ export class TimelinePanel {
     TimelinePanel.highlightTime(filePath, time);
   }
 
+  /** Open Timeline's selected beat line, if any. */
+  static selectedAfterLine(): number | undefined {
+    return TimelinePanel.current?.selectedAfterLine;
+  }
+
+  static openFilePath(): string | undefined {
+    return TimelinePanel.current?.filePath;
+  }
+
+  static async insertWaitFromCommand(
+    duration = 0.5,
+    afterLine?: number
+  ): Promise<void> {
+    const cur = TimelinePanel.current;
+    if (!cur) {
+      void vscode.window.showWarningMessage(
+        "Manim Dock: open Timeline and select a beat first (or use editor cursor)."
+      );
+      return;
+    }
+    await cur.handleInsertWait({
+      afterLine: afterLine ?? cur.selectedAfterLine,
+      duration,
+    });
+  }
+
+  static async insertPlayFromCommand(
+    animCode = "FadeIn(Dot())",
+    afterLine?: number
+  ): Promise<void> {
+    const cur = TimelinePanel.current;
+    if (!cur) {
+      void vscode.window.showWarningMessage(
+        "Manim Dock: open Timeline and select a beat first (or use editor cursor)."
+      );
+      return;
+    }
+    await cur.handleInsertPlay({
+      afterLine: afterLine ?? cur.selectedAfterLine,
+      animCode,
+    });
+  }
+
   async refresh(): Promise<void> {
     if (!this.filePath || !this.sceneName) {
       return;
@@ -191,6 +236,9 @@ export class TimelinePanel {
         const kind = String(rec.kind ?? "");
         const line = Number(rec.line ?? range.start_line ?? 0);
         const duration = Number(rec.duration ?? 0);
+        if (line > 0) {
+          this.selectedAfterLine = line;
+        }
         if (
           PropertiesPanel.isOpenFor(this.filePath) &&
           (kind === "play" || kind === "wait" || kind === "next_section")
@@ -225,6 +273,16 @@ export class TimelinePanel {
 
     if (type === "resize") {
       await this.handleResize(rec);
+      return;
+    }
+
+    if (type === "insertWait") {
+      await this.handleInsertWait(rec);
+      return;
+    }
+
+    if (type === "insertPlay") {
+      await this.handleInsertPlay(rec);
     }
   }
 
@@ -351,6 +409,125 @@ export class TimelinePanel {
     await this.refresh();
   }
 
+  private async handleInsertWait(rec: Record<string, unknown>): Promise<void> {
+    if (!this.filePath) {
+      return;
+    }
+    const afterLine = Number(rec.afterLine ?? this.selectedAfterLine ?? 0);
+    const duration = Number(rec.duration ?? 0.5);
+    if (!afterLine || afterLine < 1) {
+      void vscode.window.showWarningMessage(
+        "Manim Dock: select a Timeline beat first, then Insert wait."
+      );
+      return;
+    }
+    if (!Number.isFinite(duration) || duration < 0) {
+      return;
+    }
+    this.selectedAfterLine = afterLine;
+
+    const doc = await vscode.workspace.openTextDocument(this.filePath);
+    let proposal;
+    try {
+      proposal = await this.sidecar.proposeInsertWait(
+        this.filePath,
+        afterLine,
+        duration,
+        doc.getText()
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `Manim Dock insert wait failed: ${String(err)}`
+      );
+      return;
+    }
+
+    if (!proposal.ok) {
+      void vscode.window.showWarningMessage(
+        `Manim Dock: could not insert wait: ${proposal.error ?? "unknown"}`
+      );
+      return;
+    }
+
+    await confirmAndApplyPatch(
+      this.context,
+      {
+        path: this.filePath,
+        original: proposal.original,
+        proposed: proposal.proposed,
+        summary: proposal.summary,
+        diff: proposal.diff,
+      },
+      this.output,
+      "timeline"
+    );
+    await this.refresh();
+  }
+
+  private async handleInsertPlay(rec: Record<string, unknown>): Promise<void> {
+    if (!this.filePath) {
+      return;
+    }
+    const afterLine = Number(rec.afterLine ?? this.selectedAfterLine ?? 0);
+    if (!afterLine || afterLine < 1) {
+      void vscode.window.showWarningMessage(
+        "Manim Dock: select a Timeline beat first, then Insert play."
+      );
+      return;
+    }
+    let animCode =
+      typeof rec.animCode === "string" ? rec.animCode.trim() : "";
+    if (!animCode) {
+      const typed = await vscode.window.showInputBox({
+        title: "Manim Dock: Insert play scaffold",
+        prompt: "Animation expression inside self.play(...)",
+        value: "FadeIn(Dot())",
+      });
+      if (typed === undefined) {
+        return;
+      }
+      animCode = typed.trim() || "FadeIn(Dot())";
+    }
+    this.selectedAfterLine = afterLine;
+
+    const doc = await vscode.workspace.openTextDocument(this.filePath);
+    let proposal;
+    try {
+      proposal = await this.sidecar.proposeInsertPlay(
+        this.filePath,
+        afterLine,
+        animCode,
+        doc.getText()
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `Manim Dock insert play failed: ${String(err)}`
+      );
+      return;
+    }
+
+    if (!proposal.ok) {
+      void vscode.window.showWarningMessage(
+        `Manim Dock: could not insert play: ${proposal.error ?? "unknown"}`
+      );
+      return;
+    }
+
+    await confirmAndApplyPatch(
+      this.context,
+      {
+        path: this.filePath,
+        original: proposal.original,
+        proposed: proposal.proposed,
+        summary: proposal.summary,
+        diff: proposal.diff,
+      },
+      this.output,
+      "timeline"
+    );
+    await this.refresh();
+  }
+
   private getHtml(): string {
     const csp = [
       "default-src 'none'",
@@ -432,18 +609,28 @@ export class TimelinePanel {
     .section-row .label { font-weight: 600; color: #ddd; }
     .row.active { outline: 1px solid #ffe08a; outline-offset: 2px; border-radius: 2px; }
     .row.active .label { color: #ffe08a; }
+    .bar button {
+      font: inherit; font-size: 11px; padding: 3px 8px; cursor: pointer;
+      background: #2a2d35; color: #ddd; border: 1px solid #555; border-radius: 3px;
+    }
+    .bar button:hover { background: #353944; color: #fff; }
+    .bar button:disabled { opacity: 0.45; cursor: default; }
   </style>
 </head>
 <body>
   <div class="bar">
     <strong id="title">Timeline</strong>
-    <span class="hint">Scrub syncs Stage · drag beats within a section · drag a § group to swap with a neighbor section · drag bar edge for duration</span>
+    <button type="button" id="btnInsertWait" title="Insert self.wait(0.5) after selected beat">Insert wait</button>
+    <button type="button" id="btnInsertPlay" title="Insert self.play(...) scaffold after selected beat">Insert play</button>
+    <span class="hint">Select a beat · Insert wait/play · scrub syncs Stage · drag to reorder · drag bar edge for duration</span>
   </div>
   <div id="rows"></div>
   <script>
     const vscode = acquireVsCodeApi();
     const rowsEl = document.getElementById('rows');
     const titleEl = document.getElementById('title');
+    const btnInsertWait = document.getElementById('btnInsertWait');
+    const btnInsertPlay = document.getElementById('btnInsertPlay');
     let scrubEl = null;
     let scrubLabel = null;
     let timeline = null;
@@ -451,6 +638,31 @@ export class TimelinePanel {
     let pendingHighlightTime = null;
     let scrubTime = 0;
     let reorderArmed = false;
+    let selectedAfterLine = null;
+
+    function syncInsertButtons() {
+      const ok = !!selectedAfterLine;
+      btnInsertWait.disabled = !ok;
+      btnInsertPlay.disabled = !ok;
+    }
+
+    btnInsertWait.addEventListener('click', () => {
+      if (!selectedAfterLine) return;
+      vscode.postMessage({
+        type: 'insertWait',
+        afterLine: selectedAfterLine,
+        duration: 0.5
+      });
+    });
+    btnInsertPlay.addEventListener('click', () => {
+      if (!selectedAfterLine) return;
+      vscode.postMessage({
+        type: 'insertPlay',
+        afterLine: selectedAfterLine
+        // host prompts for anim_code scaffold
+      });
+    });
+    syncInsertButtons();
 
     function fmt(n) {
       return (Math.round(n * 100) / 100).toString();
@@ -729,11 +941,17 @@ export class TimelinePanel {
         label.textContent = ev.kind === 'next_section' ? ('§ ' + ev.label) : ev.label;
         label.addEventListener('click', () => {
           if (reorderArmed) return;
+          const line = ev.range && ev.range.start_line;
+          if (line) {
+            selectedAfterLine = line;
+            setActiveRow(row);
+            syncInsertButtons();
+          }
           vscode.postMessage({
             type: 'select',
             range: ev.range,
             kind: ev.kind,
-            line: ev.range && ev.range.start_line,
+            line: line,
             duration: ev.duration || 0
           });
         });
@@ -857,6 +1075,11 @@ export class TimelinePanel {
       if (!row) return;
       row.classList.add('active');
       row.scrollIntoView({ block: 'nearest' });
+      const start = Number(row.dataset.startLine || 0);
+      if (start) {
+        selectedAfterLine = start;
+        syncInsertButtons();
+      }
     }
 
     function highlightLine(line) {

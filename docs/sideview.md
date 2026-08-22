@@ -22,6 +22,7 @@ Manim Dock and [Manim Sideview](https://marketplace.visualstudio.com/items?itemN
 2. Use Dock Outline / Stage / Timeline for layout, pacing, and patches.
 3. Use Dock **Render Scene (QL)** (or section-aware sidecar render) when you want a fast check from Dock.
 4. Use Sideview when you want its richer preview, quality controls, or gallery insert workflow.
+5. Or run **Manim Dock: Open in Sideview** — Dock activates Sideview’s `manim-sideview.run` when installed, otherwise offers the Marketplace link.
 
 Outputs land under Manim’s usual `media/` tree. Either extension may invoke `manim`; neither requires the other.
 
