@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (Unreleased)
+## 0.2.0
 
 V3 — Stage fidelity, Timeline insert, Sideview handoff, doctor matrix (see [docs/v3-roadmap.md](docs/v3-roadmap.md)):
 

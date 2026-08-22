@@ -8,11 +8,11 @@ It docks Outline, Stage, and Timeline tools beside your normal Manim Python — 
 
 ## Status
 
-**Current release tag:** `v0.0.2` (V2). **V3 implemented on main (unreleased)** — see [v3-roadmap.md](docs/v3-roadmap.md).
+**Current:** `v0.2.0` (V3).
 
 - V1 (`v0.0.1`): Outline, Doctor, Stage, Timeline, Properties, extract, templates — [plan](docs/v1-architecture-plan.md)
 - V2 (`v0.0.2`): `patchMode`, VSIX, font_size/lag_ratio, align/distribute, scrub, P07–P10, library browser, render-method — [roadmap](docs/v2-roadmap.md)
-- V3 (`v0.2.0` unreleased): Stage ctor-chain/`next_to`/`arrange` heuristics; Insert Wait/Play; Open in Sideview; doctor version matrix — [roadmap](docs/v3-roadmap.md)
+- V3 (`v0.2.0`): Stage ctor-chain/`next_to`/`arrange` heuristics; Insert Wait/Play; Open in Sideview; doctor version matrix — [roadmap](docs/v3-roadmap.md)
 
 Requires ManimCE on PATH (or `python -m manim`) for rendering. Sideview remains optional for a richer player — see [docs/sideview.md](docs/sideview.md).
 
