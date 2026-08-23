@@ -27,3 +27,4 @@ agent-transcripts/**
 !README.md
 !LICENSE
 !CHANGELOG.md
+media/readme-*

@@ -21,16 +21,16 @@ Thanks for helping. Keep the [invasion test](docs/invasion-test.md) green.
 Build first:
 
 ```bash
-npm run package   # → manim-dock-0.2.2.vsix (gitignored)
+npm run package   # → manim-dock-0.2.3.vsix (gitignored)
 ```
 
 1. **GitHub Release (fastest public download)**  
-   Push `main`, tag `v0.2.2`, attach the `.vsix`. Users: Extensions → Install from VSIX, or Cursor/VS Code can install from the release URL.
+   Push `main`, tag `v0.2.3`, attach the `.vsix`. Users: Extensions → Install from VSIX, or Cursor/VS Code can install from the release URL.
 
 2. **Open VSX (Cursor / VSCodium friendly)**  
    Create a publisher at [open-vsx.org](https://open-vsx.org/), then:
    ```bash
-   npx ovsx publish manim-dock-0.2.2.vsix -p <OPEN_VSX_TOKEN>
+   npx ovsx publish manim-dock-0.2.3.vsix -p <OPEN_VSX_TOKEN>
    ```
 
 3. **VS Code Marketplace (largest reach)**  
@@ -41,6 +41,6 @@ npm run package   # → manim-dock-0.2.2.vsix (gitignored)
    npx vsce login manim-dock
    npx vsce publish
    ```
-   Or publish a built file: `npx vsce publish --packagePath manim-dock-0.2.2.vsix`
+   Or publish a built file: `npx vsce publish --packagePath manim-dock-0.2.3.vsix`
 
 Marketplace and Open VSX both need a **one-time human account**; the repo cannot finish that step alone.

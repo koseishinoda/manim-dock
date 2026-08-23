@@ -1,6 +1,10 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.2`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.3`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.3
+
+- README Stage & Timeline screenshot (Nyquist shift still)
 
 ## 0.2.2
 
