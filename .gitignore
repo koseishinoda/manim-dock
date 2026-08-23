@@ -33,3 +33,6 @@ examples/minimal_lesson/test.py
 *.swp
 .idea/
 *.log
+
+# Cursor IDE (local agents/rules/skills — not for contributors)
+.cursor/

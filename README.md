@@ -8,11 +8,9 @@ It docks Outline and a unified **Stage & Timeline** beside your normal Manim Pyt
 
 ## Status
 
-**Current:** `v0.2.1` (disclosure trim + Stage reuse fix).
+**Current:** [`v0.2.2`](https://github.com/koseishinoda/manim-dock/releases/tag/v0.2.2) — versioning is **git tags / GitHub Releases** only (see [CHANGELOG.md](CHANGELOG.md)).
 
-- V1 / V2 history: [v1 plan](docs/v1-architecture-plan.md), [v2 roadmap](docs/v2-roadmap.md)
-- V3: Manim Stage stills, Timeline duration/reorder, Sideview handoff — [roadmap](docs/v3-roadmap.md)
-- Cuts (Stage edit, Insert Wait/Play, Doctor): [cut list](docs/cut-list-stage-edit.md)
+- Product docs: [architecture](docs/architecture.md) · [decisions](docs/decisions.md) · [sideview](docs/sideview.md)
 
 Requires ManimCE for Stage stills and rendering (`manimDock.pythonPath` → your venv). Sideview remains optional for a richer player — see [docs/sideview.md](docs/sideview.md).
 
@@ -22,21 +20,10 @@ Requires ManimCE for Stage stills and rendering (`manimDock.pythonPath` → your
 
 **Try library extract:** Outline → right-click a method → **Extract Method to Library**, or use `examples/lesson_lib` + `examples/lesson_with_lib/lesson.py` (`PYTHONPATH=examples`).
 
-Plans (in-repo): [V1](docs/v1-architecture-plan.md) · [V2](docs/v2-roadmap.md) · [V3](docs/v3-roadmap.md) · [Validation](docs/validation-checklist.md).
-
 ## Product pillars
 
 1. **Outline + Stage & Timeline** — jump-to-source, Manim stills at scrub, duration/reorder patches
 2. **Coding facilitation** — educational snippets/templates, section scaffolds, library extract
-
-## Non-negotiables
-
-- Python / ManimCE is the **only** source of truth
-- No required plugin scene base class; uninstall-safe
-- Hard structure (`VGroup` construction, updaters, custom logic) stays in code
-- **No hidden APIs** — cut features are deleted, not dormant
-- Jupyter is out of scope (small-loop testing via sections/methods + Stage stills)
-- Preview: thin built-in video; coexist with [Manim Sideview](https://marketplace.visualstudio.com/items?itemName=Rickaym.manim-sideview) / Skill viewer
 
 ## Repository layout
 
@@ -48,8 +35,8 @@ Plans (in-repo): [V1](docs/v1-architecture-plan.md) · [V2](docs/v2-roadmap.md) 
 ├── examples/             # Sample ManimCE lessons
 ├── templates/            # File templates (basic / multi-section / multi-scene)
 ├── snippets/             # Educational snippet stubs
-├── docs/                 # Architecture, roadmaps, Sideview coexistence
-└── .cursor/              # Project agents & rules
+├── docs/                 # Architecture, decisions, Sideview coexistence
+└── LICENSE / CHANGELOG
 ```
 
 ## Quick start (development)

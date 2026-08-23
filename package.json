@@ -2,7 +2,7 @@
   "name": "manim-dock",
   "displayName": "Manim Dock",
   "description": "Dock Outline, Stage, and Timeline beside ManimCE Python for educational video production.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "manim-dock",
   "license": "MIT",
   "repository": {

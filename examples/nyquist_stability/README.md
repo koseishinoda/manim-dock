@@ -1,8 +1,6 @@
 # Nyquist stability criterion example
 
-Argument-first educational video for **Manim Dock usability assessment**.
-
-**Protocol:** produce with [Manim Skill](../../.cursor/skills/manim-skill/SKILL.md) as plain ManimCE (**no Dock knowledge** in the script). Assess with Dock only afterward.
+Multi-scene ManimCE lesson (Argument principle → Nyquist image). Plain Manim — no Dock-specific APIs.
 
 ```bash
 cd examples/nyquist_stability
@@ -13,7 +11,4 @@ manim -ql script.py \
   Scene7_NyquistImage Scene8_CountAndWhy
 ```
 
-- [`plan.md`](./plan.md) — Phase 1 (approved pedagogy)
-- [`script.py`](./script.py) — Skill Phase 2 (8 scene classes)
-
-Assessment: [`docs/assessments/nyquist-stability-usability.md`](../../docs/assessments/nyquist-stability-usability.md).
+Open `script.py` in Manim Dock to try Outline + Stage & Timeline on a larger multi-scene file.

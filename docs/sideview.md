@@ -33,4 +33,4 @@ Outputs land under Manim’s usual `media/` tree. Either extension may invoke `m
 - Uninstalling Dock (or Sideview) leaves a valid Manim project.
 - Prefer one render trigger at a time to avoid racing the same scene’s `media/` outputs.
 
-See also: [architecture.md](./architecture.md), [v3-roadmap.md](./v3-roadmap.md).
+See also: [architecture.md](./architecture.md), [CHANGELOG.md](../CHANGELOG.md).

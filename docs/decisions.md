@@ -12,4 +12,4 @@
 | Jupyter | Out of scope |
 | Cut surfaces | Deleted (no dormant APIs): Stage drag/align/Properties, Insert Wait/Play, Doctor, AST Stage layout/scrub |
 
-See also: [invasion-test.md](./invasion-test.md), [architecture.md](./architecture.md), [cut-list-stage-edit.md](./cut-list-stage-edit.md).
+See also: [invasion-test.md](./invasion-test.md), [architecture.md](./architecture.md).

@@ -1,4 +1,4 @@
-# Pattern targets (V1–V2)
+# Pattern targets
 
 Educational idioms Manim Dock optimizes:
 
@@ -19,5 +19,3 @@ Educational idioms Manim Dock optimizes:
 | P15 | Extract to library | after extract: place/time | API design |
 
 **Rule:** observe/assist `VGroup` composition; never author deep grouping in the GUI.
-
-See product discussions and `.cursor/agents/manim-affinity.md` for ongoing OSS affinity checks.

@@ -27,22 +27,10 @@ VS Code text editor  +  Manim Dock (Outline → Stage & Timeline)
 - Cut surfaces are deleted (no dormant layout/scrub/doctor/align APIs)
 - Invest in Outline / Stage stills / Timeline; keep video preview thin (Skill viewer / Sideview for finished video)
 
-## Phase map
+## Versioning
 
-| Phase | Deliverable |
-|-------|-------------|
-| 0–5 | V1 (`v0.0.1`) — see [v1-architecture-plan.md](./v1-architecture-plan.md) (historical) |
-| 6–8 | V2 (`v0.0.2`) — see [v2-roadmap.md](./v2-roadmap.md) (historical) |
-| 9+ | V3 (`v0.2.0`) — still-only Stage + trims; [v3-roadmap.md](./v3-roadmap.md) |
-
-## Subagents
-
-Project agents in `.cursor/agents/`: `invasion-guardian`, `creator-ux`, `manim-affinity`, `sidecar-python`, `surface-validator`.
-
-`surface-validator` owns Stage fit / progressive UI regressions — [surface-validator-log.md](../.cursor/agents/surface-validator-log.md).
+Ship via **git tags** and GitHub Releases (`v0.2.2`, …). Product history lives in [CHANGELOG.md](../CHANGELOG.md), not phase roadmaps.
 
 ## Related docs
 
-- [sideview.md](./sideview.md), [invasion-test.md](./invasion-test.md)
-- [cut-list-stage-edit.md](./cut-list-stage-edit.md) — Stage edit / Insert / Doctor cuts
-- [assessments/nyquist-stability-usability.md](./assessments/nyquist-stability-usability.md)
+- [sideview.md](./sideview.md), [invasion-test.md](./invasion-test.md), [patterns.md](./patterns.md)

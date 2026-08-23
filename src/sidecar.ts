@@ -590,7 +590,7 @@ export class SidecarClient {
     const roots = this.getRoots();
     if (!roots.length) {
       throw new Error(
-        `python/manim_dock not found.\nextensionPath=${this.extensionPath}\nRe-link the extension into ~/.cursor/extensions and Reload Window.`
+        `python/manim_dock not found.\nextensionPath=${this.extensionPath}\nReinstall or reload the extension so the bundled python/ folder is present.`
       );
     }
     const bins = await resolvePythonBins(this.extensionPath);
