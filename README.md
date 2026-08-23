@@ -6,11 +6,11 @@ It docks Outline and a unified **Stage & Timeline** beside your normal Manim Pyt
 
 > For people who **write Manim**. Not a no-code replacement for learning Python.
 
-Manim Dock Stage & Timeline — Manim still at scrub with beat strip (Nyquist shift scene)
+![Manim Dock Stage & Timeline — Manim still at scrub with beat strip (Nyquist shift scene)](media/readme-stage-timeline.jpg)
 
 ## Status
 
-**Current:** `[v0.2.3](https://github.com/koseishinoda/manim-dock/releases/tag/v0.2.3)`  (see [CHANGELOG.md](CHANGELOG.md)).
+**Current:** [`v0.2.3`](https://github.com/koseishinoda/manim-dock/releases/tag/v0.2.3) — versioning is **git tags / GitHub Releases** only (see [CHANGELOG.md](CHANGELOG.md)).
 
 - Product docs: [architecture](docs/architecture.md) · [decisions](docs/decisions.md) · [sideview](docs/sideview.md)
 
