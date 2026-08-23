@@ -14,9 +14,11 @@ It docks Outline and a unified **Stage & Timeline** beside your normal Manim Pyt
 
 - Product docs: [architecture](docs/architecture.md) · [decisions](docs/decisions.md) · [sideview](docs/sideview.md)
 
-Requires ManimCE for Stage stills and rendering (`manimDock.pythonPath` → your venv). Sideview remains optional for a richer player — see [docs/sideview.md](docs/sideview.md).
+Requires ManimCE for Stage stills and rendering. Dock prefers the current project's `.venv` (workspace `manimDock.pythonPath` overrides; a leftover *user*-level path does not). Sideview remains optional for a richer player — see [docs/sideview.md](docs/sideview.md).
 
 **Try Stage & Timeline:** open `examples/minimal_lesson/lesson.py` (or Nyquist) → Outline / command **Manim Dock: Open Stage & Timeline** → scrub; after ~1s a Manim still appears. Timeline edge-drag / reorder patches durations (confirm-diff, or `manimDock.patchMode` = `auto`).
+
+**Try render preview:** Outline → **Render Scene**. Animated scenes open as video; still-only scenes (`self.add` / no `play`) open as an image. Preview uses that scene's output, not leftover media from another class.
 
 **Try templates:** Command **Manim Dock: Insert Template**, or copy from `templates/`, or **Scaffold Example Project**.
 
@@ -62,7 +64,7 @@ PYTHONPATH=. python3 -m manim_dock.cli snapshot ../examples/minimal_lesson/lesso
 npm install
 npm run compile
 # Then: Run Extension (F5) — launch config "Run Manim Dock Extension"
-# Set manimDock.pythonPath to the repo .venv that has ManimCE
+# Prefer the project .venv; set workspace manimDock.pythonPath only if you need an override
 # Open examples/minimal_lesson/lesson.py → Open Stage & Timeline
 ```
 
