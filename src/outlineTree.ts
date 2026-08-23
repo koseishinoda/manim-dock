@@ -82,7 +82,13 @@ class EventNode extends vscode.TreeItem {
   ) {
     super(event.label, vscode.TreeItemCollapsibleState.None);
     this.contextValue = "manimDock.event";
-    this.description = event.kind;
+    const targets = event.targets?.filter(Boolean) ?? [];
+    // Grey secondary: mobject bindings (label already includes anim + target when known).
+    this.description =
+      targets.length > 0 ? targets.join(", ") : event.kind;
+    this.tooltip = targets.length
+      ? `${event.label}\ntargets: ${targets.join(", ")}`
+      : event.label;
     this.iconPath = new vscode.ThemeIcon(
       event.kind === "next_section"
         ? "bookmark"
@@ -108,6 +114,7 @@ export function asSceneTarget(
   const rec = item as {
     filePath?: unknown;
     scene?: { name?: unknown };
+    sceneName?: unknown;
   };
   if (
     typeof rec.filePath === "string" &&
@@ -115,6 +122,10 @@ export function asSceneTarget(
     typeof rec.scene.name === "string"
   ) {
     return { filePath: rec.filePath, sceneName: rec.scene.name };
+  }
+  // MethodNode (and similar): filePath + sceneName
+  if (typeof rec.filePath === "string" && typeof rec.sceneName === "string") {
+    return { filePath: rec.filePath, sceneName: rec.sceneName };
   }
   return undefined;
 }

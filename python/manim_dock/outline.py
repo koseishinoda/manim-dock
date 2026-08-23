@@ -25,12 +25,14 @@ class PlayOrWait:
     kind: str  # "play" | "wait" | "next_section" | "other"
     label: str
     range: SourceRange
+    targets: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
             "label": self.label,
             "range": self.range.to_dict(),
+            "targets": list(self.targets),
         }
 
 
@@ -111,11 +113,14 @@ def _call_name(node: ast.Call) -> str | None:
 
 
 def _event_from_call(node: ast.Call) -> PlayOrWait | None:
+    from manim_dock.timeline import play_call_label
+
     name = _call_name(node)
     if name is None:
         return None
     if name == "play":
-        return PlayOrWait("play", "self.play(...)", _line_range(node))
+        targets, label = play_call_label(node)
+        return PlayOrWait("play", label, _line_range(node), targets=targets)
     if name == "wait":
         label = "self.wait(...)"
         if node.args:

@@ -17,6 +17,8 @@ def test_lesson_timeline_expands_helpers():
     assert plays
     assert plays[0].editable
     assert abs(plays[0].duration - 1.2) < 1e-9
+    assert plays[0].targets == ["title"]
+    assert plays[0].label == "Write title"
 
 
 def test_constant_wait_not_editable():
@@ -40,6 +42,66 @@ class Demo(Scene):
     play = next(e for e in tl.events if e.kind == "play")
     assert play.editable
     assert play.duration_source == "default"
+    assert play.targets == []
+    assert "FadeIn" in play.label
     wait = next(e for e in tl.events if e.kind == "wait")
     assert wait.editable
     assert abs(wait.duration - 0.25) < 1e-9
+
+
+def test_play_targets_single_and_multi():
+    source = """
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        title = Text("Hi")
+        sub = Text("there")
+        self.play(Write(title))
+        self.play(Write(title), FadeIn(sub))
+        self.play(FadeOut(title), FadeOut(sub))
+"""
+    tl = parse_scene_timeline(source, "<mem>", "Demo")
+    plays = [e for e in tl.events if e.kind == "play"]
+    assert len(plays) == 3
+    assert plays[0].targets == ["title"]
+    assert plays[0].label == "Write title"
+    assert plays[1].targets == ["title", "sub"]
+    assert plays[1].label == "play Write(title), FadeIn(sub)"
+    assert plays[2].targets == ["title", "sub"]
+    assert "FadeOut(title)" in plays[2].label
+    assert "FadeOut(sub)" in plays[2].label
+
+
+def test_play_targets_attribute_and_subscript():
+    source = """
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        eq = MathTex("a", "b")
+        self.play(Indicate(eq[0]))
+        self.play(Write(self.title))
+"""
+    tl = parse_scene_timeline(source, "<mem>", "Demo")
+    plays = [e for e in tl.events if e.kind == "play"]
+    assert plays[0].targets == ["eq[0]"]
+    assert plays[0].label == "Indicate eq[0]"
+    assert plays[1].targets == ["title"]
+    assert plays[1].label == "Write title"
+
+
+def test_play_targets_lagged_start_comprehension():
+    source = """
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        hyp = VGroup(Text("a"), Text("b"))
+        self.play(LaggedStart(*[FadeIn(x) for x in hyp], lag_ratio=0.25))
+"""
+    tl = parse_scene_timeline(source, "<mem>", "Demo")
+    plays = [e for e in tl.events if e.kind == "play"]
+    assert plays[0].targets == ["hyp"]
+    assert "LaggedStart" in plays[0].label
+    assert "hyp" in plays[0].label

@@ -11,7 +11,7 @@ export interface PendingPatch {
 export type PatchMode = "confirm" | "auto";
 
 /**
- * Shared confirm-diff + WorkspaceEdit apply for Stage / Timeline / Properties.
+ * Shared confirm-diff + WorkspaceEdit apply for Timeline patches.
  */
 export class ProposedPatchProvider implements vscode.TextDocumentContentProvider {
   static readonly scheme = "manim-dock-proposed";
@@ -83,54 +83,6 @@ export async function confirmAndApplyPatch(
   }
 
   return applyPendingPatch(pending, output, channel, mode);
-}
-
-/**
- * Batch apply (align/distribute): one confirm modal, then apply each without
- * per-item diffs. Patches must be chained (each original === previous proposed).
- */
-export async function confirmAndApplyPatches(
-  _context: vscode.ExtensionContext,
-  pendings: PendingPatch[],
-  output: vscode.OutputChannel,
-  channel: string,
-  batchSummary: string
-): Promise<boolean> {
-  if (!pendings.length) {
-    return false;
-  }
-  const mode = getPatchMode();
-  if (mode === "confirm") {
-    const choice = await vscode.window.showInformationMessage(
-      `Apply ${pendings.length} shift patches for ${batchSummary}?`,
-      { modal: true },
-      "Apply",
-      "Cancel"
-    );
-    if (choice !== "Apply") {
-      return false;
-    }
-  }
-
-  for (const pending of pendings) {
-    const ok = await applyPendingPatch(pending, output, channel, mode, {
-      quiet: true,
-    });
-    if (!ok) {
-      return false;
-    }
-  }
-  if (mode === "auto") {
-    void vscode.window.setStatusBarMessage(
-      `Manim Dock: ${batchSummary} (${pendings.length} patches; Undo: Ctrl/Cmd+Z)`,
-      4000
-    );
-  } else {
-    void vscode.window.showInformationMessage(
-      `Manim Dock: applied ${pendings.length} patches for ${batchSummary}`
-    );
-  }
-  return true;
 }
 
 async function applyPendingPatch(

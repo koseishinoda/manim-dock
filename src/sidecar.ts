@@ -12,6 +12,7 @@ export interface OutlineEvent {
   kind: string;
   label: string;
   range: SourceRange;
+  targets?: string[];
 }
 
 export interface OutlineMethod {
@@ -33,11 +34,6 @@ export interface FileOutline {
   errors: string[];
 }
 
-export interface DoctorProbe {
-  name: string;
-  ok: boolean;
-  detail: string;
-}
 
 export interface RenderResult {
   ok: boolean;
@@ -49,44 +45,23 @@ export interface RenderResult {
   error: string | null;
 }
 
-export interface LayoutCall {
-  kind: string;
-  code: string;
-  range: SourceRange;
-}
-
-export interface LayoutItem {
-  name: string;
-  mobject_kind: string;
-  range: SourceRange;
-  layout_calls: LayoutCall[];
-  x: number;
-  y: number;
-  editable: boolean;
-  note: string;
-}
-
-export interface SceneLayout {
-  path: string;
-  scene: string;
-  frame_width: number;
-  frame_height: number;
-  items: LayoutItem[];
-  errors: string[];
-}
-
-export interface PatchProposal {
+export interface SnapshotResult {
   ok: boolean;
   path: string;
-  name: string;
-  dx: number;
-  dy: number;
-  original: string;
-  proposed: string;
-  diff: string;
+  scene: string;
+  active_until_line: number;
+  quality: string;
+  cache_key: string;
+  cached: boolean;
+  png_path: string | null;
+  width: number | null;
+  height: number | null;
+  command: string[];
+  returncode: number | null;
+  log_tail: string;
   error: string | null;
-  summary: string;
 }
+
 
 export interface TimelineEvent {
   id: string;
@@ -101,6 +76,8 @@ export interface TimelineEvent {
   note: string;
   /** Enclosing next_section label; empty before the first section. */
   section?: string;
+  /** Binding names inside Write/FadeIn/… args when statically recoverable. */
+  targets?: string[];
 }
 
 export interface SceneTimeline {
@@ -136,20 +113,6 @@ export interface ReorderPatchProposal {
   summary: string;
 }
 
-export interface InsertPatchProposal {
-  ok: boolean;
-  path: string;
-  kind: string;
-  after_line: number;
-  original: string;
-  proposed: string;
-  diff: string;
-  error: string | null;
-  summary: string;
-  duration?: number | null;
-  anim_code?: string | null;
-}
-
 export interface RenderOptions {
   saveSections?: boolean;
   skipUntilSection?: string;
@@ -157,23 +120,8 @@ export interface RenderOptions {
   method?: string;
 }
 
-export interface AlignItem {
-  name: string;
-  x: number;
-  y: number;
-}
 
-export interface AlignDelta {
-  name: string;
-  dx: number;
-  dy: number;
-}
 
-export interface ScrubPosition {
-  x: number;
-  y: number;
-  opacity: number;
-}
 
 export interface LibraryHelper {
   name: string;
@@ -213,17 +161,80 @@ function sidecarRoots(extensionPath: string): string[] {
   return [...new Set(roots)];
 }
 
-async function resolvePythonBins(): Promise<string[]> {
-  // Prefer system python3 first — selected IDE interpreters are often broken for -m tools.
-  const bins: string[] = ["python3"];
+function expandPythonPath(configured: string): string {
+  let resolved = configured.trim();
+  if (!resolved) {
+    return resolved;
+  }
+  const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (folder) {
+    resolved = resolved
+      .replace(/\$\{workspaceFolder\}/g, folder)
+      .replace(/\$\{workspaceRoot\}/g, folder);
+  }
+  if (resolved.startsWith("~")) {
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    resolved = path.join(home, resolved.slice(1));
+  }
+  return resolved;
+}
+
+/** Walk up from start looking for a project .venv with Manim. */
+function discoverVenvPythons(...starts: string[]): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const start of starts) {
+    if (!start) {
+      continue;
+    }
+    let cur = path.resolve(start);
+    for (let i = 0; i < 6; i++) {
+      if (seen.has(cur)) {
+        break;
+      }
+      seen.add(cur);
+      for (const rel of [
+        path.join(".venv", "bin", "python"),
+        path.join("venv", "bin", "python"),
+        path.join(".venv", "Scripts", "python.exe"),
+        path.join("venv", "Scripts", "python.exe"),
+      ]) {
+        const candidate = path.join(cur, rel);
+        if (fs.existsSync(candidate)) {
+          found.push(candidate);
+        }
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) {
+        break;
+      }
+      cur = parent;
+    }
+  }
+  return found;
+}
+
+async function resolvePythonBins(extensionPath?: string): Promise<string[]> {
+  // Prefer project .venv (extension repo or workspace ancestors) before bare python3.
+  // F5 often opens examples/* as the workspace — that folder has no .venv.
+  const bins: string[] = [];
 
   const configured = vscode.workspace
     .getConfiguration("manimDock")
-    .get<string>("pythonPath")
-    ?.trim();
-  if (configured) {
-    bins.unshift(configured);
+    .get<string>("pythonPath");
+  if (configured?.trim()) {
+    const expanded = expandPythonPath(configured);
+    if (fs.existsSync(expanded)) {
+      bins.push(expanded);
+    }
   }
+
+  bins.push(
+    ...discoverVenvPythons(
+      extensionPath ?? "",
+      ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)
+    )
+  );
 
   try {
     const pythonExt = vscode.extensions.getExtension("ms-python.python");
@@ -250,7 +261,7 @@ async function resolvePythonBins(): Promise<string[]> {
     // ignore
   }
 
-  bins.push("python");
+  bins.push("python3", "python");
   return [...new Set(bins.filter(Boolean))];
 }
 
@@ -381,15 +392,6 @@ print(json.dumps(parse_file(${JSON.stringify(filePath)}).to_dict()))
 `.trim();
 }
 
-function doctorInlineCode(pythonRoot: string): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.doctor import run_doctor
-print(json.dumps({"probes": [p.to_dict() for p in run_doctor()]}))
-`.trim();
-}
-
 function renderInlineCode(
   pythonRoot: string,
   filePath: string,
@@ -421,154 +423,34 @@ print(json.dumps(render_scene(
 `.trim();
 }
 
-function layoutInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  sceneName: string,
-  source: string | undefined
-): string {
-  if (source !== undefined) {
-    return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.layout import parse_scene_layout
-src = ${JSON.stringify(source)}
-print(json.dumps(parse_scene_layout(src, ${JSON.stringify(filePath)}, ${JSON.stringify(sceneName)}).to_dict()))
-`.trim();
-  }
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.layout import parse_file_layout
-print(json.dumps(parse_file_layout(${JSON.stringify(filePath)}, ${JSON.stringify(sceneName)}).to_dict()))
-`.trim();
-}
-
-function proposeShiftInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  name: string,
-  dx: number,
-  dy: number,
-  source: string,
-  anchorLine: number | undefined
-): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.patch_layout import propose_shift
-print(json.dumps(propose_shift(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    name=${JSON.stringify(name)},
-    dx=${JSON.stringify(dx)},
-    dy=${JSON.stringify(dy)},
-    anchor_line=${anchorLine === undefined ? "None" : JSON.stringify(anchorLine)},
-).to_dict()))
-`.trim();
-}
-
-function proposeBuffInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  name: string,
-  buff: number,
-  source: string,
-  anchorLine: number | undefined
-): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.patch_layout import propose_buff
-print(json.dumps(propose_buff(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    name=${JSON.stringify(name)},
-    buff=${JSON.stringify(buff)},
-    anchor_line=${anchorLine === undefined ? "None" : JSON.stringify(anchorLine)},
-).to_dict()))
-`.trim();
-}
-
-function proposeFontSizeInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  name: string,
-  fontSize: number,
-  source: string,
-  anchorLine: number | undefined
-): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.patch_layout import propose_font_size
-print(json.dumps(propose_font_size(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    name=${JSON.stringify(name)},
-    font_size=${JSON.stringify(fontSize)},
-    anchor_line=${anchorLine === undefined ? "None" : JSON.stringify(anchorLine)},
-).to_dict()))
-`.trim();
-}
-
-function proposeLagRatioInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  name: string,
-  lagRatio: number,
-  source: string,
-  anchorLine: number | undefined
-): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.patch_layout import propose_lag_ratio
-print(json.dumps(propose_lag_ratio(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    name=${JSON.stringify(name)},
-    lag_ratio=${JSON.stringify(lagRatio)},
-    anchor_line=${anchorLine === undefined ? "None" : JSON.stringify(anchorLine)},
-).to_dict()))
-`.trim();
-}
-
-function alignDeltasInlineCode(
-  pythonRoot: string,
-  mode: string,
-  items: AlignItem[]
-): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.align import compute_align_deltas
-print(json.dumps({"deltas": compute_align_deltas(
-    ${JSON.stringify(items)},
-    ${JSON.stringify(mode)},
-)}))
-`.trim();
-}
-
-function scrubLayoutInlineCode(
+function snapshotAtLineInlineCode(
   pythonRoot: string,
   filePath: string,
   sceneName: string,
   activeUntilLine: number,
-  source: string | undefined
+  source: string | undefined,
+  quality: string,
+  timeoutSec: number,
+  cacheDir: string | undefined
 ): string {
   const sourceArg =
     source !== undefined ? JSON.stringify(source) : "None";
+  const cacheArg =
+    cacheDir !== undefined ? JSON.stringify(cacheDir) : "None";
   return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.scrub import scrub_layout
-print(json.dumps(scrub_layout(
-    path=${JSON.stringify(filePath)},
-    scene=${JSON.stringify(sceneName)},
-    active_until_line=${JSON.stringify(activeUntilLine)},
+from manim_dock.snapshot import snapshot_at_line
+print(json.dumps(snapshot_at_line(
+    ${JSON.stringify(filePath)},
+    ${JSON.stringify(sceneName)},
+    ${JSON.stringify(activeUntilLine)},
     source=${sourceArg},
-)))
+    quality=${JSON.stringify(quality)},
+    timeout=${JSON.stringify(timeoutSec)},
+    cache_dir=${cacheArg},
+    manim_cmd=[sys.executable, "-m", "manim"],
+).to_dict()))
 `.trim();
 }
 
@@ -581,28 +463,6 @@ import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
 from manim_dock.library_catalog import list_library_helpers
 print(json.dumps({"ok": True, "helpers": list_library_helpers(${JSON.stringify(libraryPath)})}))
-`.trim();
-}
-
-function proposeScaleInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  name: string,
-  factor: number,
-  source: string,
-  anchorLine: number | undefined
-): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.patch_layout import propose_scale
-print(json.dumps(propose_scale(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    name=${JSON.stringify(name)},
-    factor=${JSON.stringify(factor)},
-    anchor_line=${anchorLine === undefined ? "None" : JSON.stringify(anchorLine)},
-).to_dict()))
 `.trim();
 }
 
@@ -691,46 +551,6 @@ print(json.dumps(propose_duration(
 `.trim();
 }
 
-function proposeInsertWaitInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  afterLine: number,
-  duration: number,
-  source: string
-): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.patch_insert import propose_insert_wait
-print(json.dumps(propose_insert_wait(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    after_line=${JSON.stringify(afterLine)},
-    duration=${JSON.stringify(duration)},
-).to_dict()))
-`.trim();
-}
-
-function proposeInsertPlayInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  afterLine: number,
-  animCode: string,
-  source: string
-): string {
-  return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.patch_insert import propose_insert_play
-print(json.dumps(propose_insert_play(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    after_line=${JSON.stringify(afterLine)},
-    anim_code=${JSON.stringify(animCode)},
-).to_dict()))
-`.trim();
-}
-
 function extractMethodInlineCode(
   pythonRoot: string,
   filePath: string,
@@ -773,7 +593,7 @@ export class SidecarClient {
         `python/manim_dock not found.\nextensionPath=${this.extensionPath}\nRe-link the extension into ~/.cursor/extensions and Reload Window.`
       );
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
 
     for (const root of roots) {
@@ -792,256 +612,49 @@ export class SidecarClient {
     throw new Error(`outline failed:\n${errors.join("\n")}`);
   }
 
-  async doctor(): Promise<{ probes: DoctorProbe[] }> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<{ probes: DoctorProbe[] }>(bin, [
-            "-c",
-            doctorInlineCode(root),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`doctor failed:\n${errors.join("\n")}`);
-  }
-
-  async layout(
-    filePath: string,
-    sceneName: string,
-    source?: string
-  ): Promise<SceneLayout> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<SceneLayout>(bin, [
-            "-c",
-            layoutInlineCode(root, filePath, sceneName, source),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`layout failed:\n${errors.join("\n")}`);
-  }
-
-  async proposeShift(
-    filePath: string,
-    name: string,
-    dx: number,
-    dy: number,
-    source: string,
-    anchorLine?: number
-  ): Promise<PatchProposal> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<PatchProposal>(bin, [
-            "-c",
-            proposeShiftInlineCode(
-              root,
-              filePath,
-              name,
-              dx,
-              dy,
-              source,
-              anchorLine
-            ),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`propose_shift failed:\n${errors.join("\n")}`);
-  }
-
-  async proposeBuff(
-    filePath: string,
-    name: string,
-    buff: number,
-    source: string,
-    anchorLine?: number
-  ): Promise<PatchProposal> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<PatchProposal>(bin, [
-            "-c",
-            proposeBuffInlineCode(
-              root,
-              filePath,
-              name,
-              buff,
-              source,
-              anchorLine
-            ),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`propose_buff failed:\n${errors.join("\n")}`);
-  }
-
-  async proposeFontSize(
-    filePath: string,
-    name: string,
-    fontSize: number,
-    source: string,
-    anchorLine?: number
-  ): Promise<PatchProposal> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<PatchProposal>(bin, [
-            "-c",
-            proposeFontSizeInlineCode(
-              root,
-              filePath,
-              name,
-              fontSize,
-              source,
-              anchorLine
-            ),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`propose_font_size failed:\n${errors.join("\n")}`);
-  }
-
-  async proposeLagRatio(
-    filePath: string,
-    name: string,
-    lagRatio: number,
-    source: string,
-    anchorLine?: number
-  ): Promise<PatchProposal> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<PatchProposal>(bin, [
-            "-c",
-            proposeLagRatioInlineCode(
-              root,
-              filePath,
-              name,
-              lagRatio,
-              source,
-              anchorLine
-            ),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`propose_lag_ratio failed:\n${errors.join("\n")}`);
-  }
-
-  async alignDeltas(
-    mode: string,
-    items: AlignItem[]
-  ): Promise<AlignDelta[]> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          const result = await runPythonJson<{ deltas: AlignDelta[] }>(bin, [
-            "-c",
-            alignDeltasInlineCode(root, mode, items),
-          ]);
-          return result.deltas ?? [];
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`align_deltas failed:\n${errors.join("\n")}`);
-  }
-
-  async scrubLayout(
+  async snapshotAtLine(
     filePath: string,
     sceneName: string,
     activeUntilLine: number,
-    source?: string
-  ): Promise<Record<string, ScrubPosition>> {
+    source?: string,
+    quality: string = "l",
+    timeoutSec: number = 60,
+    cacheDir?: string
+  ): Promise<SnapshotResult> {
     const roots = this.getRoots();
     if (!roots.length) {
       throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
+    // Host timeout slightly above Manim timeout so Python can return a structured error.
+    const hostTimeoutMs = Math.max(15_000, (timeoutSec + 15) * 1000);
     for (const root of roots) {
       for (const bin of bins) {
         try {
-          const result = await runPythonJson<{
-            positions: Record<string, ScrubPosition>;
-          }>(bin, [
-            "-c",
-            scrubLayoutInlineCode(
-              root,
-              filePath,
-              sceneName,
-              activeUntilLine,
-              source
-            ),
-          ]);
-          return result.positions ?? {};
+          return await runPythonJson<SnapshotResult>(
+            bin,
+            [
+              "-c",
+              snapshotAtLineInlineCode(
+                root,
+                filePath,
+                sceneName,
+                activeUntilLine,
+                source,
+                quality,
+                timeoutSec,
+                cacheDir
+              ),
+            ],
+            { timeoutMs: hostTimeoutMs }
+          );
         } catch (err) {
           errors.push(`[${bin}] ${String(err)}`);
         }
       }
     }
-    throw new Error(`scrub_layout failed:\n${errors.join("\n")}`);
+    throw new Error(`snapshot failed:\n${errors.join("\n")}`);
   }
 
   async libraryCatalog(libraryPath: string): Promise<LibraryHelper[]> {
@@ -1049,7 +662,7 @@ export class SidecarClient {
     if (!roots.length) {
       throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
     for (const root of roots) {
       for (const bin of bins) {
@@ -1067,41 +680,6 @@ export class SidecarClient {
     throw new Error(`library_catalog failed:\n${errors.join("\n")}`);
   }
 
-  async proposeScale(
-    filePath: string,
-    name: string,
-    factor: number,
-    source: string,
-    anchorLine?: number
-  ): Promise<PatchProposal> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<PatchProposal>(bin, [
-            "-c",
-            proposeScaleInlineCode(
-              root,
-              filePath,
-              name,
-              factor,
-              source,
-              anchorLine
-            ),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`propose_scale failed:\n${errors.join("\n")}`);
-  }
-
   async proposeReorder(
     filePath: string,
     lineA: number,
@@ -1112,7 +690,7 @@ export class SidecarClient {
     if (!roots.length) {
       throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
     for (const root of roots) {
       for (const bin of bins) {
@@ -1139,7 +717,7 @@ export class SidecarClient {
     if (!roots.length) {
       throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
     for (const root of roots) {
       for (const bin of bins) {
@@ -1165,7 +743,7 @@ export class SidecarClient {
     if (!roots.length) {
       throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
     for (const root of roots) {
       for (const bin of bins) {
@@ -1173,7 +751,7 @@ export class SidecarClient {
           return await runPythonJson<SceneTimeline>(bin, [
             "-c",
             timelineInlineCode(root, filePath, sceneName, source),
-          ]);
+          ], { timeoutMs: 30_000 });
         } catch (err) {
           errors.push(`[${bin}] ${String(err)}`);
         }
@@ -1193,7 +771,7 @@ export class SidecarClient {
     if (!roots.length) {
       throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
     for (const root of roots) {
       for (const bin of bins) {
@@ -1217,72 +795,6 @@ export class SidecarClient {
     throw new Error(`propose_duration failed:\n${errors.join("\n")}`);
   }
 
-  async proposeInsertWait(
-    filePath: string,
-    afterLine: number,
-    duration: number,
-    source: string
-  ): Promise<InsertPatchProposal> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<InsertPatchProposal>(bin, [
-            "-c",
-            proposeInsertWaitInlineCode(
-              root,
-              filePath,
-              afterLine,
-              duration,
-              source
-            ),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`propose_insert_wait failed:\n${errors.join("\n")}`);
-  }
-
-  async proposeInsertPlay(
-    filePath: string,
-    afterLine: number,
-    animCode: string,
-    source: string
-  ): Promise<InsertPatchProposal> {
-    const roots = this.getRoots();
-    if (!roots.length) {
-      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
-    }
-    const bins = await resolvePythonBins();
-    const errors: string[] = [];
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
-          return await runPythonJson<InsertPatchProposal>(bin, [
-            "-c",
-            proposeInsertPlayInlineCode(
-              root,
-              filePath,
-              afterLine,
-              animCode,
-              source
-            ),
-          ]);
-        } catch (err) {
-          errors.push(`[${bin}] ${String(err)}`);
-        }
-      }
-    }
-    throw new Error(`propose_insert_play failed:\n${errors.join("\n")}`);
-  }
-
   async extractMethod(
     filePath: string,
     sceneName: string,
@@ -1295,7 +807,7 @@ export class SidecarClient {
     if (!roots.length) {
       throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
     for (const root of roots) {
       for (const bin of bins) {
@@ -1331,7 +843,7 @@ export class SidecarClient {
     if (!roots.length) {
       throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
     }
-    const bins = await resolvePythonBins();
+    const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
     for (const root of roots) {
       for (const bin of bins) {
@@ -1359,7 +871,7 @@ export class SidecarClient {
     const lines: string[] = [];
     lines.push(`extensionPath: ${this.extensionPath}`);
     lines.push(`roots: ${JSON.stringify(this.getRoots())}`);
-    lines.push(`bins: ${JSON.stringify(await resolvePythonBins())}`);
+    lines.push(`bins: ${JSON.stringify(await resolvePythonBins(this.extensionPath))}`);
     if (sampleFile) {
       try {
         const outline = await this.outline(sampleFile);

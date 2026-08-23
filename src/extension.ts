@@ -7,12 +7,10 @@ import {
   OutlineProvider,
   revealRange,
 } from "./outlineTree";
-import { confirmAndApplyPatch, ProposedPatchProvider } from "./patchConfirm";
+import { ProposedPatchProvider } from "./patchConfirm";
 import { PreviewPanel } from "./previewPanel";
-import { PropertiesPanel } from "./propertiesPanel";
 import { RenderOptions, SidecarClient, SourceRange } from "./sidecar";
-import { StagePanel } from "./stagePanel";
-import { TimelinePanel } from "./timelinePanel";
+import { StageTimelinePanel } from "./stageTimelinePanel";
 
 const SIDEVIEW_EXT_ID = "Rickaym.manim-sideview";
 const SIDEVIEW_RUN_CMD = "manim-sideview.run";
@@ -23,6 +21,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const sidecar = new SidecarClient(context.extensionPath);
   const output = vscode.window.createOutputChannel("Manim Dock");
   const outlineProvider = new OutlineProvider(sidecar, output);
+  const outlineTree = vscode.window.createTreeView("manimDock.outline", {
+    treeDataProvider: outlineProvider,
+    showCollapseAll: true,
+  });
   ProposedPatchProvider.ensure(context);
   const patchModeStatus = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
@@ -42,7 +44,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     output,
     patchModeStatus,
-    vscode.window.registerTreeDataProvider("manimDock.outline", outlineProvider),
+    outlineTree,
     vscode.commands.registerCommand("manimDock.refreshOutline", () => {
       output.appendLine("Refreshing outline…");
       outlineProvider.refresh();
@@ -53,21 +55,6 @@ export function activate(context: vscode.ExtensionContext): void {
         await revealRange(filePath, range);
       }
     ),
-    vscode.commands.registerCommand("manimDock.doctor", async () => {
-      try {
-        const { probes } = await sidecar.doctor();
-        const lines = probes.map(
-          (p) => `${p.ok ? "OK" : "MISSING"}  ${p.name}: ${p.detail}`
-        );
-        const doc = await vscode.workspace.openTextDocument({
-          content: ["Manim Dock Doctor", "", ...lines, ""].join("\n"),
-          language: "plaintext",
-        });
-        await vscode.window.showTextDocument(doc, { preview: true });
-      } catch (err) {
-        void vscode.window.showErrorMessage(`Manim Dock doctor failed: ${String(err)}`);
-      }
-    }),
     vscode.commands.registerCommand("manimDock.debugSidecar", async () => {
       const editor = vscode.window.activeTextEditor;
       const sample =
@@ -113,24 +100,13 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     ),
     vscode.commands.registerCommand(
-      "manimDock.openStage",
+      "manimDock.openStageTimeline",
       async (item?: unknown) => {
-        await openStageCommand(context, sidecar, outlineProvider, output, item);
-      }
-    ),
-    vscode.commands.registerCommand(
-      "manimDock.openTimeline",
-      async (item?: unknown) => {
-        await openTimelineCommand(context, sidecar, outlineProvider, output, item);
-      }
-    ),
-    vscode.commands.registerCommand(
-      "manimDock.openProperties",
-      async (item?: unknown) => {
-        await openPropertiesCommand(
+        await openStageTimelineCommand(
           context,
           sidecar,
           outlineProvider,
+          outlineTree,
           output,
           item
         );
@@ -201,12 +177,6 @@ export function activate(context: vscode.ExtensionContext): void {
         await renderMethodCommand(sidecar, outlineProvider, output, item);
       }
     ),
-    vscode.commands.registerCommand("manimDock.insertWait", async () => {
-      await insertWaitCommand(context, sidecar, output);
-    }),
-    vscode.commands.registerCommand("manimDock.insertPlay", async () => {
-      await insertPlayCommand(context, sidecar, output);
-    }),
     vscode.commands.registerCommand("manimDock.openInSideview", async () => {
       await openInSideviewCommand();
     }),
@@ -224,9 +194,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (doc.languageId === "python") {
         outlineProvider.refresh();
-        StagePanel.refreshIfOpen(doc.uri.fsPath);
-        TimelinePanel.refreshIfOpen(doc.uri.fsPath);
-        PropertiesPanel.refreshIfOpen(doc.uri.fsPath);
+        StageTimelinePanel.refreshIfOpen(doc.uri.fsPath);
       }
     })
   );
@@ -235,149 +203,7 @@ export function activate(context: vscode.ExtensionContext): void {
 function syncSurfacesToEditor(editor: vscode.TextEditor): void {
   const filePath = editor.document.uri.fsPath;
   const line = editor.selection.active.line + 1; // 1-based for sidecar ranges
-  StagePanel.highlightLine(filePath, line);
-  TimelinePanel.highlightLine(filePath, line);
-}
-
-function resolveInsertTarget():
-  | { filePath: string; afterLine: number }
-  | undefined {
-  const timelinePath = TimelinePanel.openFilePath();
-  const selected = TimelinePanel.selectedAfterLine();
-  if (timelinePath && selected && selected > 0) {
-    return { filePath: timelinePath, afterLine: selected };
-  }
-  const editor = vscode.window.activeTextEditor;
-  if (editor && editor.document.languageId === "python") {
-    return {
-      filePath: editor.document.uri.fsPath,
-      afterLine: editor.selection.active.line + 1,
-    };
-  }
-  return undefined;
-}
-
-async function insertWaitCommand(
-  context: vscode.ExtensionContext,
-  sidecar: SidecarClient,
-  output: vscode.OutputChannel
-): Promise<void> {
-  const target = resolveInsertTarget();
-  if (!target) {
-    void vscode.window.showWarningMessage(
-      "Manim Dock: select a Timeline beat or place the cursor on a Python statement, then Insert Wait."
-    );
-    return;
-  }
-  // Prefer Timeline path when open for this file (keeps selection + refresh).
-  if (
-    TimelinePanel.openFilePath() === target.filePath &&
-    TimelinePanel.selectedAfterLine()
-  ) {
-    await TimelinePanel.insertWaitFromCommand(0.5, target.afterLine);
-    return;
-  }
-
-  const doc = await vscode.workspace.openTextDocument(target.filePath);
-  let proposal;
-  try {
-    proposal = await sidecar.proposeInsertWait(
-      target.filePath,
-      target.afterLine,
-      0.5,
-      doc.getText()
-    );
-  } catch (err) {
-    void vscode.window.showErrorMessage(
-      `Manim Dock insert wait failed: ${String(err)}`
-    );
-    return;
-  }
-  if (!proposal.ok) {
-    void vscode.window.showWarningMessage(
-      `Manim Dock: could not insert wait: ${proposal.error ?? "unknown"}`
-    );
-    return;
-  }
-  await confirmAndApplyPatch(
-    context,
-    {
-      path: target.filePath,
-      original: proposal.original,
-      proposed: proposal.proposed,
-      summary: proposal.summary,
-      diff: proposal.diff,
-    },
-    output,
-    "timeline"
-  );
-  TimelinePanel.refreshIfOpen(target.filePath);
-}
-
-async function insertPlayCommand(
-  context: vscode.ExtensionContext,
-  sidecar: SidecarClient,
-  output: vscode.OutputChannel
-): Promise<void> {
-  const target = resolveInsertTarget();
-  if (!target) {
-    void vscode.window.showWarningMessage(
-      "Manim Dock: select a Timeline beat or place the cursor on a Python statement, then Insert Play."
-    );
-    return;
-  }
-  const typed = await vscode.window.showInputBox({
-    title: "Manim Dock: Insert play scaffold",
-    prompt: "Animation expression inside self.play(...)",
-    value: "FadeIn(Dot())",
-  });
-  if (typed === undefined) {
-    return;
-  }
-  const animCode = typed.trim() || "FadeIn(Dot())";
-
-  if (
-    TimelinePanel.openFilePath() === target.filePath &&
-    TimelinePanel.selectedAfterLine()
-  ) {
-    await TimelinePanel.insertPlayFromCommand(animCode, target.afterLine);
-    return;
-  }
-
-  const doc = await vscode.workspace.openTextDocument(target.filePath);
-  let proposal;
-  try {
-    proposal = await sidecar.proposeInsertPlay(
-      target.filePath,
-      target.afterLine,
-      animCode,
-      doc.getText()
-    );
-  } catch (err) {
-    void vscode.window.showErrorMessage(
-      `Manim Dock insert play failed: ${String(err)}`
-    );
-    return;
-  }
-  if (!proposal.ok) {
-    void vscode.window.showWarningMessage(
-      `Manim Dock: could not insert play: ${proposal.error ?? "unknown"}`
-    );
-    return;
-  }
-  await confirmAndApplyPatch(
-    context,
-    {
-      path: target.filePath,
-      original: proposal.original,
-      proposed: proposal.proposed,
-      summary: proposal.summary,
-      diff: proposal.diff,
-    },
-    output,
-    "timeline"
-  );
-  TimelinePanel.refreshIfOpen(target.filePath);
+  StageTimelinePanel.highlightLine(filePath, line);
 }
 
 async function openInSideviewCommand(): Promise<void> {
@@ -429,11 +255,21 @@ async function openInSideviewCommand(): Promise<void> {
 async function resolveSceneTarget(
   outlineProvider: OutlineProvider,
   output: vscode.OutputChannel,
-  item?: unknown
+  item?: unknown,
+  outlineTree?: vscode.TreeView<unknown>
 ): Promise<{ filePath: string; sceneName: string } | undefined> {
-  const fromTree = asSceneTarget(item);
-  if (fromTree) {
-    return fromTree;
+  const fromArg = asSceneTarget(item);
+  if (fromArg) {
+    return fromArg;
+  }
+  // Toolbar / palette: use Outline selection (scene or method under a scene).
+  if (outlineTree) {
+    for (const sel of outlineTree.selection) {
+      const fromSel = asSceneTarget(sel);
+      if (fromSel) {
+        return fromSel;
+      }
+    }
   }
   const resolved = await outlineProvider.resolvePythonOutline();
   if ("error" in resolved) {
@@ -457,71 +293,48 @@ async function resolveSceneTarget(
   return { filePath: resolved.filePath, sceneName: picked };
 }
 
-async function openStageCommand(
+async function openStageTimelineCommand(
   context: vscode.ExtensionContext,
   sidecar: SidecarClient,
   outlineProvider: OutlineProvider,
+  outlineTree: vscode.TreeView<unknown>,
   output: vscode.OutputChannel,
   item?: unknown
 ): Promise<void> {
-  const target = await resolveSceneTarget(outlineProvider, output, item);
-  if (!target) {
-    return;
-  }
-  output.appendLine(`\n=== Stage ${target.sceneName} (${target.filePath}) ===`);
-  await StagePanel.open(
-    context,
-    sidecar,
+  const target = await resolveSceneTarget(
+    outlineProvider,
     output,
-    target.filePath,
-    target.sceneName
+    item,
+    outlineTree
   );
-}
-
-async function openTimelineCommand(
-  context: vscode.ExtensionContext,
-  sidecar: SidecarClient,
-  outlineProvider: OutlineProvider,
-  output: vscode.OutputChannel,
-  item?: unknown
-): Promise<void> {
-  const target = await resolveSceneTarget(outlineProvider, output, item);
   if (!target) {
     return;
   }
   output.appendLine(
-    `\n=== Timeline ${target.sceneName} (${target.filePath}) ===`
+    `\n=== Stage & Timeline ${target.sceneName} (${target.filePath}) ===`
   );
-  await TimelinePanel.open(
-    context,
-    sidecar,
-    output,
-    target.filePath,
-    target.sceneName
-  );
-}
-
-async function openPropertiesCommand(
-  context: vscode.ExtensionContext,
-  sidecar: SidecarClient,
-  outlineProvider: OutlineProvider,
-  output: vscode.OutputChannel,
-  item?: unknown
-): Promise<void> {
-  const target = await resolveSceneTarget(outlineProvider, output, item);
-  if (!target) {
-    return;
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Manim Dock: opening Stage & Timeline — ${target.sceneName}`,
+      },
+      async () => {
+        await StageTimelinePanel.open(
+          context,
+          sidecar,
+          output,
+          target.filePath,
+          target.sceneName
+        );
+      }
+    );
+  } catch (err) {
+    output.appendLine(`[stage-timeline] open failed: ${String(err)}`);
+    void vscode.window.showErrorMessage(
+      `Manim Dock: could not open Stage & Timeline: ${String(err)}`
+    );
   }
-  output.appendLine(
-    `\n=== Properties ${target.sceneName} (${target.filePath}) ===`
-  );
-  await PropertiesPanel.open(
-    context,
-    sidecar,
-    output,
-    target.filePath,
-    target.sceneName
-  );
 }
 
 async function insertTemplateCommand(
@@ -1028,22 +841,31 @@ async function renderSkipToSectionCommand(
     return;
   }
   const scene = resolved.outline.scenes.find((s) => s.name === target.sceneName);
+  /** Bare Manim section names (not Outline display labels). */
   const sections: string[] = [];
+  const seen = new Set<string>();
   for (const method of scene?.methods ?? []) {
     for (const ev of method.events) {
-      if (ev.kind === "next_section" && ev.label) {
-        sections.push(ev.label);
+      if (ev.kind !== "next_section") {
+        continue;
       }
+      const name = sectionNameFromOutlineEvent(ev.label);
+      if (!name || seen.has(name)) {
+        continue;
+      }
+      seen.add(name);
+      sections.push(name);
     }
   }
   if (!sections.length) {
     void vscode.window.showWarningMessage(
-      "Manim Dock: no next_section events found in this scene."
+      "Manim Dock: no self.next_section(\"…\") markers in this scene. " +
+        "Skip-to-section needs next_section chapters (Skill multi-scene files: render the Scene class instead)."
     );
     return;
   }
   const picked = await vscode.window.showQuickPick(sections, {
-    placeHolder: "Skip until section",
+    placeHolder: "Skip animations until this section, then render",
   });
   if (!picked) {
     return;
@@ -1058,6 +880,26 @@ async function renderSkipToSectionCommand(
       titleSuffix: ` (skip → ${picked})`,
     }
   );
+}
+
+/**
+ * Outline labels look like `self.next_section('Title')`; render expects bare `Title`.
+ */
+function sectionNameFromOutlineEvent(label: string | undefined): string | undefined {
+  if (!label) {
+    return undefined;
+  }
+  const m = label.match(
+    /next_section\s*\(\s*(?:name\s*=\s*)?(['"])(.*?)\1/
+  );
+  if (m?.[2]) {
+    return m[2];
+  }
+  // Already a bare name (e.g. from Timeline).
+  if (!label.includes("(") && label.trim()) {
+    return label.trim();
+  }
+  return undefined;
 }
 
 async function renderSceneCommand(
@@ -1132,7 +974,7 @@ async function renderSceneCommand(
       } catch (err) {
         output.appendLine(String(err));
         void vscode.window.showErrorMessage(
-          `Manim Dock render failed: ${String(err)}. Run Doctor if manim is missing.`
+          `Manim Dock render failed: ${String(err)}. Check the Manim Dock output and your Python/Manim install.`
         );
       }
     }

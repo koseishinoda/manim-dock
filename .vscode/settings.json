@@ -1,3 +1,4 @@
 {
-  "npm.autoDetect": "off"
+  "npm.autoDetect": "off",
+  "manimDock.pythonPath": "${workspaceFolder}/.venv/bin/python"
 }

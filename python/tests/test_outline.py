@@ -37,6 +37,24 @@ class Nested(Scene):
     assert len(outline.scenes) == 1
     events = outline.scenes[0].methods[0].events
     assert [e.kind for e in events] == ["play", "wait"]
+    assert events[0].targets == ["group"]
+    assert events[0].label == "FadeIn group"
+
+
+def test_play_outline_shows_object_names():
+    source = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        title = Text("Hi")
+        self.play(Write(title))
+'''
+    outline = parse_source(source, path="<play>")
+    play = outline.scenes[0].methods[0].events[0]
+    assert play.kind == "play"
+    assert play.targets == ["title"]
+    assert play.label == "Write title"
 
 
 def test_syntax_error_reports_without_crash():

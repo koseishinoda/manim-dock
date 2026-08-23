@@ -29,6 +29,7 @@ class TimelineEvent:
     duration_source: str  # literal | constant | default | unknown
     note: str = ""
     section: str = ""  # enclosing next_section label; "" before first section
+    targets: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +44,7 @@ class TimelineEvent:
             "duration_source": self.duration_source,
             "note": self.note,
             "section": self.section,
+            "targets": list(self.targets),
         }
 
 
@@ -153,6 +155,124 @@ def _section_label(node: ast.Call) -> str:
     return "section"
 
 
+def _expr_binding_name(node: ast.AST) -> str | None:
+    """Best-effort binding name from Name / Attribute / simple Subscript."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parts: list[str] = []
+        cur: ast.AST = node
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            if cur.id == "self" and parts:
+                return parts[0] if len(parts) == 1 else ".".join(reversed(parts))
+            parts.append(cur.id)
+            return ".".join(reversed(parts))
+        return ".".join(reversed(parts)) if parts else None
+    if isinstance(node, ast.Subscript):
+        base = _expr_binding_name(node.value)
+        if base is None:
+            return None
+        try:
+            sl = ast.unparse(node.slice)
+        except Exception:
+            sl = "…"
+        return f"{base}[{sl}]"
+    return None
+
+
+def _ctor_name(call: ast.Call) -> str | None:
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
+
+
+def _starred_or_gen_targets(node: ast.AST) -> list[str]:
+    """Best-effort targets from ``*[FadeIn(x) for x in hyp]`` / ``*hyp``."""
+    if isinstance(node, ast.Starred):
+        return _starred_or_gen_targets(node.value)
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+        names: list[str] = []
+        for gen in node.generators:
+            n = _expr_binding_name(gen.iter)
+            if n:
+                names.append(n)
+        return names
+    n = _expr_binding_name(node)
+    return [n] if n else []
+
+
+def _anim_ctor_and_targets(arg: ast.AST) -> tuple[str | None, list[str]]:
+    """From ``Write(title)`` → ``('Write', ['title'])``; bare Name → ``(None, ['title'])``."""
+    if isinstance(arg, ast.Starred):
+        return None, _starred_or_gen_targets(arg)
+    if not isinstance(arg, ast.Call):
+        name = _expr_binding_name(arg)
+        return None, [name] if name else []
+    ctor = _ctor_name(arg)
+    targets: list[str] = []
+    for a in arg.args:
+        if isinstance(a, ast.Starred):
+            targets.extend(_starred_or_gen_targets(a))
+            continue
+        n = _expr_binding_name(a)
+        if n:
+            targets.append(n)
+    return ctor, targets
+
+
+def _unique_preserve(names: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _play_targets_and_label(call: ast.Call) -> tuple[list[str], str]:
+    """Extract animated target bindings and a human label for ``self.play(...)``."""
+    fragments: list[str] = []
+    all_targets: list[str] = []
+    for arg in call.args:
+        ctor, targets = _anim_ctor_and_targets(arg)
+        all_targets.extend(targets)
+        if ctor and targets:
+            if len(targets) == 1:
+                fragments.append(f"{ctor}({targets[0]})")
+            else:
+                fragments.append(f"{ctor}({', '.join(targets)})")
+        elif ctor:
+            fragments.append(f"{ctor}…")
+        elif targets:
+            fragments.append(", ".join(targets))
+
+    targets = _unique_preserve(all_targets)
+    if len(fragments) == 1:
+        ctor, frag_targets = _anim_ctor_and_targets(call.args[0])
+        if ctor and frag_targets:
+            label = f"{ctor} {' '.join(frag_targets)}"
+        elif ctor:
+            label = f"play({ctor}…)"
+        else:
+            label = fragments[0]
+    elif fragments:
+        label = "play " + ", ".join(fragments)
+    else:
+        label = "play(...)"
+    return targets, label
+
+
+def play_call_label(call: ast.Call) -> tuple[list[str], str]:
+    """Public helper for Outline (and Timeline) play-event labels + targets."""
+    return _play_targets_and_label(call)
+
+
 def _methods_by_name(
     class_def: ast.ClassDef,
 ) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -248,17 +368,7 @@ def _expand_method(
                     t += dur
                 else:  # play
                     dur, source, editable, note = _play_runtime(call, constants)
-                    label = "play(...)"
-                    if call.args:
-                        first = call.args[0]
-                        ctor: str | None = None
-                        if isinstance(first, ast.Call):
-                            if isinstance(first.func, ast.Name):
-                                ctor = first.func.id
-                            elif isinstance(first.func, ast.Attribute):
-                                ctor = first.func.attr
-                        if ctor:
-                            label = f"play({ctor}…)"
+                    targets, label = _play_targets_and_label(call)
                     events.append(
                         TimelineEvent(
                             id=eid,
@@ -272,6 +382,7 @@ def _expand_method(
                             duration_source=source,
                             note=note,
                             section=current_section[0],
+                            targets=targets,
                         )
                     )
                     t += dur

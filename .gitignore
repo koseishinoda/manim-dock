@@ -24,6 +24,9 @@ htmlcov/
 **/media/texts/
 **/media/Tex/
 examples/**/media/
+examples/**/*.mp4
+examples/minimal_lesson/temp/
+examples/minimal_lesson/test.py
 
 # OS / editor
 .DS_Store

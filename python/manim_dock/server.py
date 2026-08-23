@@ -12,30 +12,16 @@ import json
 import sys
 from typing import Any
 
-from manim_dock.doctor import run_doctor
 from manim_dock.extract import propose_extract_method_files
-from manim_dock.layout import parse_file_layout
 from manim_dock.library_catalog import list_library_helpers
 from manim_dock.outline import parse_file
-from manim_dock.align import compute_align_deltas
-from manim_dock.patch_layout import (
-    propose_buff_file,
-    propose_font_size_file,
-    propose_lag_ratio_file,
-    propose_scale_file,
-    propose_shift_file,
-)
-from manim_dock.patch_insert import (
-    propose_insert_play_file,
-    propose_insert_wait_file,
-)
 from manim_dock.patch_timing import (
     propose_duration_file,
     propose_reorder_file,
     propose_section_reorder_file,
 )
 from manim_dock.render import render_scene
-from manim_dock.scrub import scrub_layout
+from manim_dock.snapshot import snapshot_at_line
 from manim_dock.timeline import parse_file_timeline
 
 
@@ -47,39 +33,6 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         if not path:
             raise ValueError("params.path is required")
         return parse_file(path).to_dict()
-    if method == "layout":
-        path = params.get("path")
-        scene = params.get("scene")
-        if not path or not scene:
-            raise ValueError("params.path and params.scene are required")
-        source = params.get("source")
-        if isinstance(source, str):
-            from manim_dock.layout import parse_scene_layout
-
-            return parse_scene_layout(source, str(path), str(scene)).to_dict()
-        return parse_file_layout(path, str(scene)).to_dict()
-    if method == "propose_shift":
-        path = params.get("path")
-        name = params.get("name")
-        if not path or not name:
-            raise ValueError("params.path and params.name are required")
-        dx = float(params.get("dx") or 0)
-        dy = float(params.get("dy") or 0)
-        anchor = params.get("anchor_line")
-        anchor_line = int(anchor) if anchor is not None else None
-        source = params.get("source")
-        if isinstance(source, str):
-            from manim_dock.patch_layout import propose_shift
-
-            return propose_shift(
-                source,
-                path=str(path),
-                name=str(name),
-                dx=dx,
-                dy=dy,
-                anchor_line=anchor_line,
-            ).to_dict()
-        return propose_shift_file(str(path), str(name), dx, dy, anchor_line).to_dict()
     if method == "timeline":
         path = params.get("path")
         scene = params.get("scene")
@@ -112,119 +65,6 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         return propose_duration_file(
             str(path), str(kind), int(line), duration
         ).to_dict()
-    if method == "propose_buff":
-        path = params.get("path")
-        name = params.get("name")
-        if not path or not name:
-            raise ValueError("params.path and params.name are required")
-        if params.get("buff") is None:
-            raise ValueError("params.buff is required")
-        buff = float(params.get("buff"))
-        anchor = params.get("anchor_line")
-        anchor_line = int(anchor) if anchor is not None else None
-        source = params.get("source")
-        if isinstance(source, str):
-            from manim_dock.patch_layout import propose_buff
-
-            return propose_buff(
-                source,
-                path=str(path),
-                name=str(name),
-                buff=buff,
-                anchor_line=anchor_line,
-            ).to_dict()
-        return propose_buff_file(str(path), str(name), buff, anchor_line).to_dict()
-    if method == "propose_scale":
-        path = params.get("path")
-        name = params.get("name")
-        if not path or not name:
-            raise ValueError("params.path and params.name are required")
-        if params.get("factor") is None:
-            raise ValueError("params.factor is required")
-        factor = float(params.get("factor"))
-        anchor = params.get("anchor_line")
-        anchor_line = int(anchor) if anchor is not None else None
-        source = params.get("source")
-        if isinstance(source, str):
-            from manim_dock.patch_layout import propose_scale
-
-            return propose_scale(
-                source,
-                path=str(path),
-                name=str(name),
-                factor=factor,
-                anchor_line=anchor_line,
-            ).to_dict()
-        return propose_scale_file(str(path), str(name), factor, anchor_line).to_dict()
-    if method == "propose_font_size":
-        path = params.get("path")
-        name = params.get("name")
-        if not path or not name:
-            raise ValueError("params.path and params.name are required")
-        if params.get("font_size") is None:
-            raise ValueError("params.font_size is required")
-        font_size = float(params.get("font_size"))
-        anchor = params.get("anchor_line")
-        anchor_line = int(anchor) if anchor is not None else None
-        source = params.get("source")
-        if isinstance(source, str):
-            from manim_dock.patch_layout import propose_font_size
-
-            return propose_font_size(
-                source,
-                path=str(path),
-                name=str(name),
-                font_size=font_size,
-                anchor_line=anchor_line,
-            ).to_dict()
-        return propose_font_size_file(
-            str(path), str(name), font_size, anchor_line
-        ).to_dict()
-    if method == "propose_lag_ratio":
-        path = params.get("path")
-        name = params.get("name")
-        if not path or not name:
-            raise ValueError("params.path and params.name are required")
-        if params.get("lag_ratio") is None:
-            raise ValueError("params.lag_ratio is required")
-        lag_ratio = float(params.get("lag_ratio"))
-        anchor = params.get("anchor_line")
-        anchor_line = int(anchor) if anchor is not None else None
-        source = params.get("source")
-        if isinstance(source, str):
-            from manim_dock.patch_layout import propose_lag_ratio
-
-            return propose_lag_ratio(
-                source,
-                path=str(path),
-                name=str(name),
-                lag_ratio=lag_ratio,
-                anchor_line=anchor_line,
-            ).to_dict()
-        return propose_lag_ratio_file(
-            str(path), str(name), lag_ratio, anchor_line
-        ).to_dict()
-    if method == "scrub_layout":
-        path = params.get("path")
-        scene = params.get("scene")
-        active = params.get("active_until_line")
-        if not path or not scene or active is None:
-            raise ValueError(
-                "params.path, params.scene, and params.active_until_line are required"
-            )
-        source = params.get("source")
-        return scrub_layout(
-            str(path),
-            str(scene),
-            int(active),
-            source=source if isinstance(source, str) else None,
-        )
-    if method == "align_deltas":
-        items = params.get("items")
-        mode = params.get("mode")
-        if not isinstance(items, list) or not mode:
-            raise ValueError("params.items (list) and params.mode are required")
-        return {"deltas": compute_align_deltas(items, str(mode))}
     if method == "propose_reorder":
         path = params.get("path")
         line_a = params.get("line_a")
@@ -261,44 +101,6 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         return propose_section_reorder_file(
             str(path), int(line_a), int(line_b)
         ).to_dict()
-    if method == "propose_insert_wait":
-        path = params.get("path")
-        after_line = params.get("after_line")
-        if not path or after_line is None:
-            raise ValueError("params.path and params.after_line are required")
-        duration = float(params.get("duration") if params.get("duration") is not None else 0.5)
-        source = params.get("source")
-        if isinstance(source, str):
-            from manim_dock.patch_insert import propose_insert_wait
-
-            return propose_insert_wait(
-                source,
-                path=str(path),
-                after_line=int(after_line),
-                duration=duration,
-            ).to_dict()
-        return propose_insert_wait_file(
-            str(path), int(after_line), duration
-        ).to_dict()
-    if method == "propose_insert_play":
-        path = params.get("path")
-        after_line = params.get("after_line")
-        if not path or after_line is None:
-            raise ValueError("params.path and params.after_line are required")
-        anim_code = str(params.get("anim_code") or "FadeIn(Dot())")
-        source = params.get("source")
-        if isinstance(source, str):
-            from manim_dock.patch_insert import propose_insert_play
-
-            return propose_insert_play(
-                source,
-                path=str(path),
-                after_line=int(after_line),
-                anim_code=anim_code,
-            ).to_dict()
-        return propose_insert_play_file(
-            str(path), int(after_line), anim_code
-        ).to_dict()
     if method == "extract_method":
         path = params.get("path")
         scene = params.get("scene")
@@ -326,6 +128,25 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         return propose_extract_method_files(
             str(path), str(scene), str(method_name), str(library_path)
         ).to_dict()
+    if method == "snapshot":
+        path = params.get("path")
+        scene = params.get("scene")
+        active = params.get("active_until_line")
+        if not path or not scene or active is None:
+            raise ValueError(
+                "params.path, params.scene, and params.active_until_line are required"
+            )
+        quality = params.get("quality") or "l"
+        timeout = params.get("timeout")
+        source = params.get("source")
+        return snapshot_at_line(
+            path,
+            str(scene),
+            int(active),
+            source=source if isinstance(source, str) else None,
+            quality=str(quality),
+            timeout=int(timeout) if timeout is not None else None,
+        ).to_dict()
     if method == "render":
         path = params.get("path")
         scene = params.get("scene")
@@ -351,8 +172,6 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
             raise ValueError("params.path (library .py) is required")
         helpers = list_library_helpers(str(library_path))
         return {"ok": True, "helpers": helpers}
-    if method == "doctor":
-        return {"probes": [p.to_dict() for p in run_doctor()]}
     raise ValueError(f"unknown method: {method}")
 
 
