@@ -29,7 +29,7 @@ VS Code text editor  +  Manim Dock (Outline → Stage & Timeline)
 
 ## Versioning
 
-Ship via **git tags** and GitHub Releases (`v0.2.3`, …). Product history lives in [CHANGELOG.md](../CHANGELOG.md), not phase roadmaps.
+Ship via **git tags** and GitHub Releases (`v0.2.4`, …). Product history lives in [CHANGELOG.md](../CHANGELOG.md), not phase roadmaps.
 
 ## Related docs
 
