@@ -1,6 +1,10 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.4`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.5`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.5
+
+- Fix render preview picking the wrong media: parse rich-wrapped `File ready at` paths, accept stills (PNG), never fall back to an unrelated scene's mp4
 
 ## 0.2.4
 

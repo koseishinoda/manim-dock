@@ -2,7 +2,8 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 /**
- * Thin built-in video preview (A+ strategy: not a Sideview clone).
+ * Thin built-in preview for render output (video or still).
+ * Not a Sideview clone — coexist with Skill / Sideview for richer playback.
  */
 export class PreviewPanel {
   public static readonly viewType = "manimDock.preview";
@@ -16,11 +17,11 @@ export class PreviewPanel {
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
-  static show(videoPath: string, title?: string): void {
+  static show(mediaPath: string, title?: string): void {
     const column = vscode.ViewColumn.Beside;
     if (PreviewPanel.current) {
       PreviewPanel.current.panel.reveal(column);
-      PreviewPanel.current.setVideo(videoPath, title);
+      PreviewPanel.current.setMedia(mediaPath, title);
       return;
     }
 
@@ -31,26 +32,33 @@ export class PreviewPanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.file(path.dirname(videoPath))],
+        localResourceRoots: [vscode.Uri.file(path.dirname(mediaPath))],
       }
     );
     PreviewPanel.current = new PreviewPanel(panel);
-    PreviewPanel.current.setVideo(videoPath, title);
+    PreviewPanel.current.setMedia(mediaPath, title);
   }
 
-  private setVideo(videoPath: string, title?: string): void {
-    const dir = path.dirname(videoPath);
-    this.panel.title = title ?? path.basename(videoPath);
+  private setMedia(mediaPath: string, title?: string): void {
+    const dir = path.dirname(mediaPath);
+    this.panel.title = title ?? path.basename(mediaPath);
     this.panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.file(dir)],
     };
-    const uri = this.panel.webview.asWebviewUri(vscode.Uri.file(videoPath));
+    const uri = this.panel.webview.asWebviewUri(vscode.Uri.file(mediaPath));
+    const ext = path.extname(mediaPath).toLowerCase();
+    const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext);
     const csp = [
       "default-src 'none'",
       `media-src ${this.panel.webview.cspSource} file:`,
+      `img-src ${this.panel.webview.cspSource} file: data:`,
       "style-src 'unsafe-inline'",
     ].join("; ");
+
+    const mediaEl = isImage
+      ? `<img class="still" alt="${escapeHtml(path.basename(mediaPath))}" src="${uri}" />`
+      : `<video controls autoplay src="${uri}"></video>`;
 
     this.panel.webview.html = `<!DOCTYPE html>
 <html lang="en">
@@ -86,10 +94,11 @@ export class PreviewPanel {
       opacity: 0.8;
       word-break: break-all;
     }
-    video {
+    video, img.still {
       flex: 1 1 auto;
       min-height: 0;
       width: 100%;
+      object-fit: contain;
       background: #000;
     }
     .hint {
@@ -101,8 +110,8 @@ export class PreviewPanel {
 </head>
 <body>
   <div class="wrap">
-    <div class="meta">${escapeHtml(videoPath)}</div>
-    <video controls autoplay src="${uri}"></video>
+    <div class="meta">${escapeHtml(mediaPath)}</div>
+    ${mediaEl}
     <div class="hint">Thin Dock preview — use Manim Sideview for a richer player if you prefer.</div>
   </div>
 </body>

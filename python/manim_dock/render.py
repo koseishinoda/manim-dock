@@ -15,9 +15,13 @@ import libcst as cst
 
 
 FILE_READY_RE = re.compile(
-    r"File ready at ['\"]([^'\"]+)['\"]",
-    re.IGNORECASE,
+    r"File ready at\s+['\"]([^'\"]+)['\"]",
+    re.IGNORECASE | re.DOTALL,
 )
+
+_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
+_MEDIA_SUFFIXES = _VIDEO_SUFFIXES | _IMAGE_SUFFIXES
 
 
 @dataclass
@@ -61,25 +65,40 @@ def _quality_flag(quality: str) -> str:
 
 
 def _extract_output_path(log: str) -> str | None:
+    """Parse Manim's ``File ready at '…'`` line (including rich-console wrap)."""
     matches = FILE_READY_RE.findall(log)
-    if matches:
-        return matches[-1]
-    return None
+    if not matches:
+        return None
+    # Rich console wraps long paths across lines with padding spaces/newlines.
+    return re.sub(r"\s+", "", matches[-1])
 
 
-def _find_newest_mp4(media_root: Path, scene_name: str) -> str | None:
+def _find_newest_media(media_root: Path, scene_name: str) -> str | None:
+    """Locate newest media whose stem matches ``scene_name``.
+
+    Never falls back to an unrelated file (e.g. another scene's leftover mp4).
+    Prefers video over still when both exist.
+    """
     if not media_root.is_dir():
         return None
-    candidates = sorted(
-        media_root.rglob("*.mp4"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
     scene_lower = scene_name.lower()
-    for path in candidates:
-        if scene_lower in path.stem.lower():
-            return str(path.resolve())
-    return str(candidates[0].resolve()) if candidates else None
+    matched: list[Path] = []
+    for path in media_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in _MEDIA_SUFFIXES:
+            continue
+        if "partial_movie_files" in path.parts:
+            continue
+        if scene_lower not in path.stem.lower():
+            continue
+        matched.append(path)
+    if not matched:
+        return None
+    videos = [p for p in matched if p.suffix.lower() in _VIDEO_SUFFIXES]
+    pool = videos or matched
+    pool.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return str(pool[0].resolve())
 
 
 def _is_self_next_section(call: cst.Call) -> bool:
@@ -407,14 +426,14 @@ def render_scene(
 
     output = _extract_output_path(log)
     if output is None:
-        output = _find_newest_mp4(cwd / "media", scene_name)
+        output = _find_newest_media(cwd / "media", scene_name)
 
     ok = proc.returncode == 0 and bool(output)
     error = None
     if proc.returncode != 0:
         error = f"manim exited with code {proc.returncode}"
     elif not output:
-        error = "render finished but output video was not found"
+        error = "render finished but output media was not found"
 
     return RenderResult(
         ok=ok,
