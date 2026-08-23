@@ -64,6 +64,76 @@ def test_inject_at_construct_start_when_line_zero():
     assert "raise EndSceneEarlyException()" in head
 
 
+SHORT_THEN_OTHER = '''
+from manim import *
+
+class Demo_FeedbackLoop2(Scene):
+    def construct(self):
+        diagram = Text("loop")
+        self.add(diagram)
+        self.wait(1)
+
+class Scene1_TheQuestion(Scene):
+    def construct(self):
+        self.wait(0.1)
+'''
+
+
+def test_inject_on_last_line_of_class_stays_inside_construct():
+    """Cursor on last construct stmt (same end_lineno as ClassDef) must not
+    inject at module scope between classes."""
+    lines = SHORT_THEN_OTHER.splitlines()
+    wait_line = next(
+        i for i, line in enumerate(lines, 1) if line.strip() == "self.wait(1)"
+    )
+    out = inject_early_exit(SHORT_THEN_OTHER, wait_line, scene_name="Demo_FeedbackLoop2")
+    compile(out, "<inject>", "exec")
+
+    other_i = out.index("class Scene1_TheQuestion")
+    raise_i = out.index("raise EndSceneEarlyException()")
+    assert raise_i < other_i
+
+    # Raise must be indented (inside construct), not module-level.
+    raise_line = next(
+        ln for ln in out.splitlines() if "raise EndSceneEarlyException()" in ln
+    )
+    assert raise_line.startswith(" "), f"expected indented raise, got {raise_line!r}"
+    assert not raise_line.startswith("raise "), "module-level raise is a Stage crash"
+
+
+CLASS_ATTR_SCENE = '''
+from manim import *
+
+class Demo(Scene):
+    title_text = "Hello"
+    """scene docstring / multi-line string decoy"""
+
+    def construct(self):
+        title = Text(self.title_text)
+        self.play(Write(title))
+        self.wait(0.5)
+'''
+
+
+def test_inject_on_class_attribute_goes_to_construct_start():
+    lines = CLASS_ATTR_SCENE.splitlines()
+    attr_line = next(i for i, line in enumerate(lines, 1) if "title_text" in line)
+    out = inject_early_exit(CLASS_ATTR_SCENE, attr_line, scene_name="Demo")
+    compile(out, "<inject>", "exec")
+
+    # Must not sit in the class body before def construct.
+    before_construct, _, after = out.partition("def construct")
+    assert "raise EndSceneEarlyException()" not in before_construct
+    assert "raise EndSceneEarlyException()" in after
+
+    construct_body = after.split(":", 1)[1]
+    # First executable line of construct should be the raise.
+    body_lines = [ln for ln in construct_body.splitlines() if ln.strip()]
+    assert body_lines[0].strip() == "raise EndSceneEarlyException()"
+    raise_line = body_lines[0]
+    assert raise_line.startswith(" "), f"expected indented raise, got {raise_line!r}"
+
+
 def test_cache_key_stable_and_sensitive():
     a = snapshot_cache_key(SAMPLE, "Demo", 12, quality="l")
     b = snapshot_cache_key(SAMPLE, "Demo", 12, quality="l")

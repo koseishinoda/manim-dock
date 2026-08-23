@@ -1,6 +1,10 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.5`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.6`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.6
+
+- Fix Stage snapshot injecting `raise EndSceneEarlyException()` at module scope when the cursor is on the last line of a scene class (or on class-body attributes) — raise only inside `construct()`
 
 ## 0.2.5
 

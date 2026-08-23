@@ -10,7 +10,7 @@ It docks Outline and a unified **Stage & Timeline** beside your normal Manim Pyt
 
 ## Status
 
-**Current:** [`v0.2.5`](https://github.com/koseishinoda/manim-dock/releases/tag/v0.2.5) — versioning is **git tags / GitHub Releases** only (see [CHANGELOG.md](CHANGELOG.md)).
+**Current:** [`v0.2.6`](https://github.com/koseishinoda/manim-dock/releases/tag/v0.2.6) — versioning is **git tags / GitHub Releases** only (see [CHANGELOG.md](CHANGELOG.md)).
 
 - Product docs: [architecture](docs/architecture.md) · [decisions](docs/decisions.md) · [sideview](docs/sideview.md)
 

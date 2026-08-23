@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SNAPSHOT_VERSION = "v1"
+SNAPSHOT_VERSION = "v2"
 DEFAULT_TIMEOUT = 60
 EARLY_EXIT_IMPORT = "from manim.utils.exceptions import EndSceneEarlyException"
 
@@ -189,19 +189,76 @@ def _stmt_end_line(node: ast.AST) -> int:
     return int(getattr(node, "end_lineno", None) or getattr(node, "lineno", 0) or 0)
 
 
-def _find_anchor_statement(
-    tree: ast.AST, until_line: int
+def _is_construct(node: ast.AST) -> bool:
+    return (
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "construct"
+    )
+
+
+def _find_construct(
+    tree: ast.Module, until_line: int, scene_name: str | None = None
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """Locate ``construct`` for the scene class that owns ``until_line``."""
+    classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+
+    def construct_of(
+        cls: ast.ClassDef,
+    ) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+        for item in cls.body:
+            if _is_construct(item):
+                return item
+        return None
+
+    containing = [
+        cls
+        for cls in classes
+        if cls.lineno <= until_line <= _stmt_end_line(cls)
+    ]
+
+    if scene_name:
+        for cls in containing:
+            if cls.name == scene_name:
+                found = construct_of(cls)
+                if found is not None:
+                    return found
+        for cls in classes:
+            if cls.name == scene_name:
+                found = construct_of(cls)
+                if found is not None:
+                    return found
+
+    if containing:
+        found = construct_of(containing[-1])
+        if found is not None:
+            return found
+
+    for cls in classes:
+        found = construct_of(cls)
+        if found is not None:
+            return found
+    return None
+
+
+def _find_anchor_in_construct(
+    construct: ast.FunctionDef | ast.AsyncFunctionDef, until_line: int
 ) -> tuple[list[ast.stmt], int] | None:
-    """Return ``(body_list, index)`` for the statement ending at/just before until_line."""
+    """Last statement inside ``construct`` with ``end_lineno <= until_line``.
+
+    Never anchors on nested ``ClassDef`` / ``FunctionDef`` — only executable
+    statements whose raise can run during ``construct()``.
+    """
     best: tuple[list[ast.stmt], int, int] | None = None  # body, idx, end
 
     def consider(body: list[ast.stmt]) -> None:
         nonlocal best
         for i, stmt in enumerate(body):
-            end = _stmt_end_line(stmt)
-            if end <= 0:
+            if isinstance(
+                stmt, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
                 continue
-            if end > until_line:
+            end = _stmt_end_line(stmt)
+            if end <= 0 or end > until_line:
                 continue
             if best is None or end > best[2] or (end == best[2] and i >= best[1]):
                 best = (body, i, end)
@@ -209,6 +266,10 @@ def _find_anchor_statement(
     def walk_body(body: list[ast.stmt]) -> None:
         consider(body)
         for stmt in body:
+            if isinstance(
+                stmt, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                continue
             for attr in ("body", "orelse", "finalbody"):
                 child = getattr(stmt, attr, None)
                 if isinstance(child, list) and child and isinstance(child[0], ast.stmt):
@@ -217,24 +278,23 @@ def _find_anchor_statement(
                 for handler in stmt.handlers:
                     walk_body(handler.body)
 
-    if isinstance(tree, ast.Module):
-        walk_body(tree.body)
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef):
-                walk_body(node.body)
-                for item in node.body:
-                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        walk_body(item.body)
-
+    walk_body(construct.body)
     if best is None:
         return None
     return best[0], best[1]
 
 
-def inject_early_exit(source: str, until_line: int) -> str:
+def inject_early_exit(
+    source: str, until_line: int, scene_name: str | None = None
+) -> str:
     """Return source that raises ``EndSceneEarlyException`` after ``until_line``.
 
-    If ``until_line < 1``, inserts the raise at the start of the first ``construct``.
+    The raise is **always** placed inside a ``construct()`` body so Manim can
+    catch it while rendering. Module- / class-scope injection is never used.
+
+    If ``until_line < 1``, or the cursor sits on class attributes / docstring
+    above any ``construct`` statement, inserts the raise at the start of that
+    scene's ``construct``.
     """
     tree = ast.parse(source)
     if not isinstance(tree, ast.Module):
@@ -244,27 +304,33 @@ def inject_early_exit(source: str, until_line: int) -> str:
     ast.fix_missing_locations(raise_stmt)
 
     if until_line < 1:
-        inserted = False
+        construct = None
         for node in tree.body:
             if not isinstance(node, ast.ClassDef):
                 continue
             for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    if item.name != "construct":
-                        continue
-                    item.body.insert(0, raise_stmt)
-                    inserted = True
+                if _is_construct(item):
+                    construct = item
                     break
-            if inserted:
+            if construct is not None:
                 break
-        if not inserted:
+        if construct is None:
             raise ValueError("no construct() found to inject early exit")
+        construct.body.insert(0, raise_stmt)
     else:
-        anchor = _find_anchor_statement(tree, until_line)
+        construct = _find_construct(tree, until_line, scene_name)
+        if construct is None:
+            raise ValueError(
+                f"no construct() found for line {until_line}"
+                + (f" / scene {scene_name}" if scene_name else "")
+            )
+        anchor = _find_anchor_in_construct(construct, until_line)
         if anchor is None:
-            raise ValueError(f"no statement found at or before line {until_line}")
-        body, idx = anchor
-        body.insert(idx + 1, raise_stmt)
+            # Class attribute / docstring / above construct body → start of construct.
+            construct.body.insert(0, raise_stmt)
+        else:
+            body, idx = anchor
+            body.insert(idx + 1, raise_stmt)
 
     _ensure_early_exit_import(tree)
     ast.fix_missing_locations(tree)
@@ -333,7 +399,9 @@ def snapshot_at_line(
         return base
 
     try:
-        transformed = inject_early_exit(source, active_until_line)
+        transformed = inject_early_exit(
+            source, active_until_line, scene_name=scene_name
+        )
     except (SyntaxError, ValueError) as exc:
         base.error = f"snapshot transform failed: {exc}"
         return base
