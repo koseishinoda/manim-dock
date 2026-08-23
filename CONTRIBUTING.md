@@ -21,26 +21,42 @@ Thanks for helping. Keep the [invasion test](docs/invasion-test.md) green.
 Build first:
 
 ```bash
-npm run package   # → manim-dock-0.2.3.vsix (gitignored)
+npm run package   # → manim-dock-0.2.4.vsix (gitignored)
 ```
 
-1. **GitHub Release (fastest public download)**  
-   Push `main`, tag `v0.2.3`, attach the `.vsix`. Users: Extensions → Install from VSIX, or Cursor/VS Code can install from the release URL.
+Publisher id in `package.json` is **`manim-dock`** — use the **same** name on both stores.
 
-2. **Open VSX (Cursor / VSCodium friendly)**  
-   Create a publisher at [open-vsx.org](https://open-vsx.org/), then:
+### 1. GitHub Release
+
+https://github.com/koseishinoda/manim-dock/releases — Install from VSIX.
+
+### 2. Open VSX (Cursor Extensions search)
+
+1. Create / sign in: [open-vsx.org](https://open-vsx.org/) (GitHub login)
+2. Profile → connect Eclipse account → **sign Open VSX Publisher Agreement**
+3. [Access Tokens](https://open-vsx.org/user-settings/tokens) → Generate New Token → copy it
+4. One-time namespace (matches `publisher`):
    ```bash
-   npx ovsx publish manim-dock-0.2.3.vsix -p <OPEN_VSX_TOKEN>
+   npx ovsx create-namespace manim-dock -p "$OVSX_PAT"
    ```
-
-3. **VS Code Marketplace (largest reach)**  
-   - Create a [Visual Studio Marketplace publisher](https://marketplace.visualstudio.com/manage) (Azure DevOps org + PAT with Marketplace scope).  
-   - Ensure `package.json` `publisher` matches that publisher id (currently `manim-dock`).  
-   - Then:
+5. Publish:
    ```bash
-   npx vsce login manim-dock
-   npx vsce publish
+   export OVSX_PAT='…'   # paste token; do not commit
+   npx ovsx publish manim-dock-0.2.4.vsix -p "$OVSX_PAT"
    ```
-   Or publish a built file: `npx vsce publish --packagePath manim-dock-0.2.3.vsix`
+6. Check: https://open-vsx.org/extension/manim-dock/manim-dock
 
-Marketplace and Open VSX both need a **one-time human account**; the repo cannot finish that step alone.
+### 3. VS Code Marketplace
+
+1. Create publisher **`manim-dock`**: [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage)  
+   (needs a Microsoft / Azure DevOps account)
+2. Create Azure DevOps PAT with **Marketplace → Acquire, Publish**  
+   https://dev.azure.com → User settings → Personal access tokens
+3. Publish:
+   ```bash
+   export VSCE_PAT='…'   # paste PAT; do not commit
+   npx vsce publish --packagePath manim-dock-0.2.4.vsix -p "$VSCE_PAT"
+   ```
+4. Check: https://marketplace.visualstudio.com/items?itemName=manim-dock.manim-dock
+
+Do **not** put tokens in the repo or chat. After both succeed, Cursor (Open VSX) and VS Code (Marketplace) can install from Extensions search.

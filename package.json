@@ -2,9 +2,10 @@
   "name": "manim-dock",
   "displayName": "Manim Dock",
   "description": "Dock Outline, Stage, and Timeline beside ManimCE Python for educational video production.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "manim-dock",
   "license": "MIT",
+  "icon": "media/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/koseishinoda/manim-dock.git"
@@ -249,7 +250,7 @@
         "manimDock.pythonPath": {
           "type": "string",
           "default": "",
-          "description": "Python interpreter for the Manim Dock sidecar. Empty = use the VS Code Python extension interpreter, else `python3`."
+          "markdownDescription": "Python interpreter for the Manim Dock sidecar (outline, snapshot, render).\n\n**Precedence:** workspace/folder `manimDock.pythonPath` → `.venv` in the current workspace → VS Code/Cursor Python interpreter → **user-level** `manimDock.pythonPath` (fallback only) → extension-repo `.venv` (F5) → `python3`.\n\nPrefer a **workspace** setting (or leave empty and use a project `.venv`) so a leftover user path from another repo cannot win. Empty workspace value is fine."
         },
         "manimDock.sidecarModule": {
           "type": "string",

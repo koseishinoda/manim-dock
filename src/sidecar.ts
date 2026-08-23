@@ -215,26 +215,43 @@ function discoverVenvPythons(...starts: string[]): string[] {
 }
 
 async function resolvePythonBins(extensionPath?: string): Promise<string[]> {
-  // Prefer project .venv (extension repo or workspace ancestors) before bare python3.
-  // F5 often opens examples/* as the workspace — that folder has no .venv.
+  // Precedence (per-project Manim tools):
+  // 1. Workspace / folder manimDock.pythonPath
+  // 2. .venv under current workspace folder(s) (walk-up)
+  // 3. VS Code / Cursor Python extension interpreter
+  // 4. User-level manimDock.pythonPath (fallback only)
+  // 5. Extension-repo .venv (F5 when examples/* has no local venv)
+  // 6. python3 / python
   const bins: string[] = [];
+  const resource =
+    vscode.window.activeTextEditor?.document.uri ??
+    vscode.workspace.workspaceFolders?.[0]?.uri;
+  const inspected = vscode.workspace
+    .getConfiguration("manimDock", resource)
+    .inspect<string>("pythonPath");
 
-  const configured = vscode.workspace
-    .getConfiguration("manimDock")
-    .get<string>("pythonPath");
-  if (configured?.trim()) {
-    const expanded = expandPythonPath(configured);
-    if (fs.existsSync(expanded)) {
+  const workspaceConfigured =
+    inspected?.workspaceFolderValue?.trim() ||
+    inspected?.workspaceValue?.trim() ||
+    "";
+  const globalConfigured = inspected?.globalValue?.trim() || "";
+
+  const pushIfExists = (raw: string | undefined): void => {
+    if (!raw?.trim()) {
+      return;
+    }
+    const expanded = expandPythonPath(raw);
+    if (expanded && fs.existsSync(expanded)) {
       bins.push(expanded);
     }
-  }
+  };
 
-  bins.push(
-    ...discoverVenvPythons(
-      extensionPath ?? "",
-      ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)
-    )
+  pushIfExists(workspaceConfigured);
+
+  const workspaceRoots = (vscode.workspace.workspaceFolders ?? []).map(
+    (f) => f.uri.fsPath
   );
+  bins.push(...discoverVenvPythons(...workspaceRoots));
 
   try {
     const pythonExt = vscode.extensions.getExtension("ms-python.python");
@@ -249,9 +266,7 @@ async function resolvePythonBins(extensionPath?: string): Promise<string[]> {
           };
         };
       };
-      const details = api.settings?.getExecutionDetails?.(
-        vscode.window.activeTextEditor?.document.uri
-      );
+      const details = api.settings?.getExecutionDetails?.(resource);
       const cmd = details?.execCommand?.[0];
       if (cmd) {
         bins.push(cmd);
@@ -259,6 +274,12 @@ async function resolvePythonBins(extensionPath?: string): Promise<string[]> {
     }
   } catch {
     // ignore
+  }
+
+  pushIfExists(globalConfigured);
+
+  if (extensionPath) {
+    bins.push(...discoverVenvPythons(extensionPath));
   }
 
   bins.push("python3", "python");

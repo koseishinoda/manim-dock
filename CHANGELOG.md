@@ -1,6 +1,11 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.3`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.4`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.4
+
+- Fix `manimDock.pythonPath` precedence: workspace / project `.venv` before user-level path (stops leftover global paths from other repos winning)
+- Marketplace icon (`media/icon.png`)
 
 ## 0.2.3
 
