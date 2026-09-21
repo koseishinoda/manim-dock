@@ -1,6 +1,10 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.6`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.7`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.7
+
+- Fix Stage/Timeline `spawn E2BIG` on large scene buffers: pass source via stdin (not argv) and drop oversized env vars from the sidecar child
 
 ## 0.2.6
 

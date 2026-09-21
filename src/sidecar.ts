@@ -333,6 +333,31 @@ function extractJsonObject<T>(stdout: string): T {
   throw new Error("unterminated JSON object in stdout");
 }
 
+/** Drop huge env values so spawn argv+env stays under Linux ARG_MAX. */
+const MAX_ENV_VALUE_BYTES = 8 * 1024;
+
+function sidecarChildEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (Buffer.byteLength(value, "utf8") > MAX_ENV_VALUE_BYTES) {
+      continue;
+    }
+    out[key] = value;
+  }
+  if (extra) {
+    for (const [key, value] of Object.entries(extra)) {
+      if (value === undefined) {
+        continue;
+      }
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 function runPythonJson<T>(
   pythonPath: string,
   args: string[],
@@ -341,15 +366,14 @@ function runPythonJson<T>(
     onLog?: (chunk: string) => void;
     cwd?: string;
     env?: NodeJS.ProcessEnv;
+    /** JSON (or other) payload — never put large source in argv. */
+    stdin?: string;
   }
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const child = spawn(pythonPath, args, {
       cwd: options?.cwd,
-      env: {
-        ...process.env,
-        ...(options?.env ?? {}),
-      },
+      env: sidecarChildEnv(options?.env),
     });
     let stdout = "";
     let stderr = "";
@@ -400,6 +424,11 @@ function runPythonJson<T>(
         );
       }
     });
+
+    if (options?.stdin !== undefined) {
+      child.stdin.write(options.stdin, "utf8");
+    }
+    child.stdin.end();
   });
 }
 
@@ -444,32 +473,21 @@ print(json.dumps(render_scene(
 `.trim();
 }
 
-function snapshotAtLineInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  sceneName: string,
-  activeUntilLine: number,
-  source: string | undefined,
-  quality: string,
-  timeoutSec: number,
-  cacheDir: string | undefined
-): string {
-  const sourceArg =
-    source !== undefined ? JSON.stringify(source) : "None";
-  const cacheArg =
-    cacheDir !== undefined ? JSON.stringify(cacheDir) : "None";
+/** Tiny -c stub: params (incl. large source) arrive as JSON on stdin. */
+function snapshotAtLineInlineCode(pythonRoot: string): string {
   return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
 from manim_dock.snapshot import snapshot_at_line
+p = json.load(sys.stdin)
 print(json.dumps(snapshot_at_line(
-    ${JSON.stringify(filePath)},
-    ${JSON.stringify(sceneName)},
-    ${JSON.stringify(activeUntilLine)},
-    source=${sourceArg},
-    quality=${JSON.stringify(quality)},
-    timeout=${JSON.stringify(timeoutSec)},
-    cache_dir=${cacheArg},
+    p["file_path"],
+    p["scene_name"],
+    p["active_until_line"],
+    source=p.get("source"),
+    quality=p.get("quality", "l"),
+    timeout=p.get("timeout"),
+    cache_dir=p.get("cache_dir"),
     manim_cmd=[sys.executable, "-m", "manim"],
 ).to_dict()))
 `.trim();
@@ -487,111 +505,79 @@ print(json.dumps({"ok": True, "helpers": list_library_helpers(${JSON.stringify(l
 `.trim();
 }
 
-function proposeReorderInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  lineA: number,
-  lineB: number,
-  source: string
-): string {
+function proposeReorderInlineCode(pythonRoot: string): string {
   return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
 from manim_dock.patch_timing import propose_reorder
+p = json.load(sys.stdin)
 print(json.dumps(propose_reorder(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    line_a=${JSON.stringify(lineA)},
-    line_b=${JSON.stringify(lineB)},
+    p["source"],
+    path=p["file_path"],
+    line_a=p["line_a"],
+    line_b=p["line_b"],
 ).to_dict()))
 `.trim();
 }
 
-function proposeSectionReorderInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  lineA: number,
-  lineB: number,
-  source: string
-): string {
+function proposeSectionReorderInlineCode(pythonRoot: string): string {
   return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
 from manim_dock.patch_timing import propose_section_reorder
+p = json.load(sys.stdin)
 print(json.dumps(propose_section_reorder(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    line_a=${JSON.stringify(lineA)},
-    line_b=${JSON.stringify(lineB)},
+    p["source"],
+    path=p["file_path"],
+    line_a=p["line_a"],
+    line_b=p["line_b"],
 ).to_dict()))
 `.trim();
 }
 
-function timelineInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  sceneName: string,
-  source: string | undefined
-): string {
-  if (source !== undefined) {
-    return `
-import json, sys
-sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.timeline import parse_scene_timeline
-src = ${JSON.stringify(source)}
-print(json.dumps(parse_scene_timeline(src, ${JSON.stringify(filePath)}, ${JSON.stringify(sceneName)}).to_dict()))
-`.trim();
-  }
+function timelineInlineCode(pythonRoot: string): string {
   return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
-from manim_dock.timeline import parse_file_timeline
-print(json.dumps(parse_file_timeline(${JSON.stringify(filePath)}, ${JSON.stringify(sceneName)}).to_dict()))
+from manim_dock.timeline import parse_file_timeline, parse_scene_timeline
+p = json.load(sys.stdin)
+src = p.get("source")
+if src is None:
+    print(json.dumps(parse_file_timeline(p["file_path"], p["scene_name"]).to_dict()))
+else:
+    print(json.dumps(parse_scene_timeline(src, p["file_path"], p["scene_name"]).to_dict()))
 `.trim();
 }
 
-function proposeDurationInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  kind: string,
-  line: number,
-  duration: number,
-  source: string
-): string {
+function proposeDurationInlineCode(pythonRoot: string): string {
   return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
 from manim_dock.patch_timing import propose_duration
+p = json.load(sys.stdin)
 print(json.dumps(propose_duration(
-    ${JSON.stringify(source)},
-    path=${JSON.stringify(filePath)},
-    kind=${JSON.stringify(kind)},
-    line=${JSON.stringify(line)},
-    duration=${JSON.stringify(duration)},
+    p["source"],
+    path=p["file_path"],
+    kind=p["kind"],
+    line=p["line"],
+    duration=p["duration"],
 ).to_dict()))
 `.trim();
 }
 
-function extractMethodInlineCode(
-  pythonRoot: string,
-  filePath: string,
-  sceneName: string,
-  methodName: string,
-  libraryPath: string,
-  source: string,
-  librarySource: string | null
-): string {
+function extractMethodInlineCode(pythonRoot: string): string {
   return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(pythonRoot)})
 from manim_dock.extract import propose_extract_method
+p = json.load(sys.stdin)
 print(json.dumps(propose_extract_method(
-    ${JSON.stringify(source)},
-    scene_path=${JSON.stringify(filePath)},
-    scene_name=${JSON.stringify(sceneName)},
-    method_name=${JSON.stringify(methodName)},
-    library_path=${JSON.stringify(libraryPath)},
-    library_source=${librarySource === null ? "None" : JSON.stringify(librarySource)},
+    p["source"],
+    scene_path=p["file_path"],
+    scene_name=p["scene_name"],
+    method_name=p["method_name"],
+    library_path=p["library_path"],
+    library_source=p.get("library_source"),
 ).to_dict()))
 `.trim();
 }
@@ -655,20 +641,19 @@ export class SidecarClient {
         try {
           return await runPythonJson<SnapshotResult>(
             bin,
-            [
-              "-c",
-              snapshotAtLineInlineCode(
-                root,
-                filePath,
-                sceneName,
-                activeUntilLine,
-                source,
+            ["-c", snapshotAtLineInlineCode(root)],
+            {
+              timeoutMs: hostTimeoutMs,
+              stdin: JSON.stringify({
+                file_path: filePath,
+                scene_name: sceneName,
+                active_until_line: activeUntilLine,
+                source: source ?? null,
                 quality,
-                timeoutSec,
-                cacheDir
-              ),
-            ],
-            { timeoutMs: hostTimeoutMs }
+                timeout: timeoutSec,
+                cache_dir: cacheDir ?? null,
+              }),
+            }
           );
         } catch (err) {
           errors.push(`[${bin}] ${String(err)}`);
@@ -718,8 +703,15 @@ export class SidecarClient {
         try {
           return await runPythonJson<ReorderPatchProposal>(bin, [
             "-c",
-            proposeReorderInlineCode(root, filePath, lineA, lineB, source),
-          ]);
+            proposeReorderInlineCode(root),
+          ], {
+            stdin: JSON.stringify({
+              source,
+              file_path: filePath,
+              line_a: lineA,
+              line_b: lineB,
+            }),
+          });
         } catch (err) {
           errors.push(`[${bin}] ${String(err)}`);
         }
@@ -745,8 +737,15 @@ export class SidecarClient {
         try {
           return await runPythonJson<ReorderPatchProposal>(bin, [
             "-c",
-            proposeSectionReorderInlineCode(root, filePath, lineA, lineB, source),
-          ]);
+            proposeSectionReorderInlineCode(root),
+          ], {
+            stdin: JSON.stringify({
+              source,
+              file_path: filePath,
+              line_a: lineA,
+              line_b: lineB,
+            }),
+          });
         } catch (err) {
           errors.push(`[${bin}] ${String(err)}`);
         }
@@ -769,10 +768,18 @@ export class SidecarClient {
     for (const root of roots) {
       for (const bin of bins) {
         try {
-          return await runPythonJson<SceneTimeline>(bin, [
-            "-c",
-            timelineInlineCode(root, filePath, sceneName, source),
-          ], { timeoutMs: 30_000 });
+          return await runPythonJson<SceneTimeline>(
+            bin,
+            ["-c", timelineInlineCode(root)],
+            {
+              timeoutMs: 30_000,
+              stdin: JSON.stringify({
+                file_path: filePath,
+                scene_name: sceneName,
+                source: source ?? null,
+              }),
+            }
+          );
         } catch (err) {
           errors.push(`[${bin}] ${String(err)}`);
         }
@@ -799,15 +806,16 @@ export class SidecarClient {
         try {
           return await runPythonJson<TimingPatchProposal>(bin, [
             "-c",
-            proposeDurationInlineCode(
-              root,
-              filePath,
+            proposeDurationInlineCode(root),
+          ], {
+            stdin: JSON.stringify({
+              source,
+              file_path: filePath,
               kind,
               line,
               duration,
-              source
-            ),
-          ]);
+            }),
+          });
         } catch (err) {
           errors.push(`[${bin}] ${String(err)}`);
         }
@@ -835,16 +843,17 @@ export class SidecarClient {
         try {
           return await runPythonJson<ExtractProposal>(bin, [
             "-c",
-            extractMethodInlineCode(
-              root,
-              filePath,
-              sceneName,
-              methodName,
-              libraryPath,
+            extractMethodInlineCode(root),
+          ], {
+            stdin: JSON.stringify({
               source,
-              librarySource
-            ),
-          ]);
+              file_path: filePath,
+              scene_name: sceneName,
+              method_name: methodName,
+              library_path: libraryPath,
+              library_source: librarySource,
+            }),
+          });
         } catch (err) {
           errors.push(`[${bin}] ${String(err)}`);
         }

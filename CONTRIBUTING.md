@@ -21,7 +21,7 @@ Thanks for helping. Keep the [invasion test](docs/invasion-test.md) green.
 Build first:
 
 ```bash
-npm run package   # → manim-dock-0.2.6.vsix (gitignored)
+npm run package   # → manim-dock-0.2.7.vsix (gitignored)
 ```
 
 Publisher id in `package.json` is **`manim-dock`** — use the **same** name on both stores.
@@ -42,7 +42,7 @@ https://github.com/koseishinoda/manim-dock/releases — Install from VSIX.
 5. Publish:
    ```bash
    export OVSX_PAT='…'   # paste token; do not commit
-   npx ovsx publish manim-dock-0.2.6.vsix -p "$OVSX_PAT"
+   npx ovsx publish manim-dock-0.2.7.vsix -p "$OVSX_PAT"
    ```
 6. Check: https://open-vsx.org/extension/manim-dock/manim-dock
 
@@ -55,7 +55,7 @@ https://github.com/koseishinoda/manim-dock/releases — Install from VSIX.
 3. Publish:
    ```bash
    export VSCE_PAT='…'   # paste PAT; do not commit
-   npx vsce publish --packagePath manim-dock-0.2.6.vsix -p "$VSCE_PAT"
+   npx vsce publish --packagePath manim-dock-0.2.7.vsix -p "$VSCE_PAT"
    ```
 4. Check: https://marketplace.visualstudio.com/items?itemName=manim-dock.manim-dock
 
