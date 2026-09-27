@@ -134,6 +134,48 @@ def test_inject_on_class_attribute_goes_to_construct_start():
     assert raise_line.startswith(" "), f"expected indented raise, got {raise_line!r}"
 
 
+MULTILINE_PLAY = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        title = Text("Hello")
+        self.play(
+            Write(title),
+            run_time=2,
+        )
+        self.wait(0.5)
+'''
+
+
+def test_inject_on_first_line_of_multiline_runs_full_statement():
+    """Cursor on the opening line of a multi-line call → still after that call."""
+    lines = MULTILINE_PLAY.splitlines()
+    play_line = next(i for i, line in enumerate(lines, 1) if "self.play(" in line)
+    # Sanity: statement spans past the cursor line.
+    assert any(
+        i > play_line and "run_time" in line for i, line in enumerate(lines, 1)
+    )
+    out = inject_early_exit(MULTILINE_PLAY, play_line, scene_name="Demo")
+    compile(out, "<inject>", "exec")
+    raise_i = out.index("raise EndSceneEarlyException()")
+    play_i = out.index("self.play(")
+    wait_i = out.index("self.wait")
+    assert play_i < raise_i < wait_i
+    # Must include the closing of the multi-line call before the raise.
+    assert "run_time" in out[play_i:raise_i]
+
+
+def test_inject_mid_multiline_statement_still_after_full_call():
+    lines = MULTILINE_PLAY.splitlines()
+    mid = next(i for i, line in enumerate(lines, 1) if "Write(title)" in line)
+    out = inject_early_exit(MULTILINE_PLAY, mid, scene_name="Demo")
+    raise_i = out.index("raise EndSceneEarlyException()")
+    wait_i = out.index("self.wait")
+    assert "run_time" in out[:raise_i]
+    assert raise_i < wait_i
+
+
 def test_cache_key_stable_and_sensitive():
     a = snapshot_cache_key(SAMPLE, "Demo", 12, quality="l")
     b = snapshot_cache_key(SAMPLE, "Demo", 12, quality="l")

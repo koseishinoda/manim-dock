@@ -1,6 +1,10 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.7`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.8`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.8
+
+- Stage still captures **after** the statement under the cursor (incl. multi-line `self.play` / `MathTex`), not the previous command
 
 ## 0.2.7
 

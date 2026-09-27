@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SNAPSHOT_VERSION = "v2"
+SNAPSHOT_VERSION = "v3"
 DEFAULT_TIMEOUT = 60
 EARLY_EXIT_IMPORT = "from manim.utils.exceptions import EndSceneEarlyException"
 
@@ -243,25 +243,47 @@ def _find_construct(
 def _find_anchor_in_construct(
     construct: ast.FunctionDef | ast.AsyncFunctionDef, until_line: int
 ) -> tuple[list[ast.stmt], int] | None:
-    """Last statement inside ``construct`` with ``end_lineno <= until_line``.
+    """Statement to finish before the Stage still.
 
-    Never anchors on nested ``ClassDef`` / ``FunctionDef`` — only executable
-    statements whose raise can run during ``construct()``.
+    Prefer the innermost executable statement that **contains** ``until_line``
+    (so a multi-line ``self.play(...)`` / ``MathTex(...)`` runs to completion
+    even when the cursor is on its first line). Otherwise fall back to the last
+    statement with ``end_lineno <= until_line`` (blank line / between stmts).
+
+    Never anchors on nested ``ClassDef`` / ``FunctionDef``.
     """
-    best: tuple[list[ast.stmt], int, int] | None = None  # body, idx, end
+    # body, idx, start, end — containing cursor
+    containing: tuple[list[ast.stmt], int, int, int] | None = None
+    # body, idx, end — last finished at/before cursor
+    finished: tuple[list[ast.stmt], int, int] | None = None
 
     def consider(body: list[ast.stmt]) -> None:
-        nonlocal best
+        nonlocal containing, finished
         for i, stmt in enumerate(body):
             if isinstance(
                 stmt, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
             ):
                 continue
+            start = int(getattr(stmt, "lineno", 0) or 0)
             end = _stmt_end_line(stmt)
-            if end <= 0 or end > until_line:
+            if end <= 0:
                 continue
-            if best is None or end > best[2] or (end == best[2] and i >= best[1]):
-                best = (body, i, end)
+            if start <= until_line <= end:
+                span = end - start
+                if containing is None:
+                    containing = (body, i, start, end)
+                else:
+                    prev_span = containing[3] - containing[2]
+                    # Innermost wins (tightest span); tie → later in same body.
+                    if span < prev_span or (
+                        span == prev_span and end >= containing[3] and i >= containing[1]
+                    ):
+                        containing = (body, i, start, end)
+            if end <= until_line:
+                if finished is None or end > finished[2] or (
+                    end == finished[2] and i >= finished[1]
+                ):
+                    finished = (body, i, end)
 
     def walk_body(body: list[ast.stmt]) -> None:
         consider(body)
@@ -279,18 +301,24 @@ def _find_anchor_in_construct(
                     walk_body(handler.body)
 
     walk_body(construct.body)
-    if best is None:
-        return None
-    return best[0], best[1]
+    if containing is not None:
+        return containing[0], containing[1]
+    if finished is not None:
+        return finished[0], finished[1]
+    return None
 
 
 def inject_early_exit(
     source: str, until_line: int, scene_name: str | None = None
 ) -> str:
-    """Return source that raises ``EndSceneEarlyException`` after ``until_line``.
+    """Return source that raises ``EndSceneEarlyException`` after the cursor stmt.
 
     The raise is **always** placed inside a ``construct()`` body so Manim can
     catch it while rendering. Module- / class-scope injection is never used.
+
+    When ``until_line`` falls inside a (possibly multi-line) statement, that
+    whole statement runs first — Stage shows the still *after* the command.
+    Blank lines fall back to the last finished statement.
 
     If ``until_line < 1``, or the cursor sits on class attributes / docstring
     above any ``construct`` statement, inserts the raise at the start of that
