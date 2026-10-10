@@ -39,12 +39,16 @@ class FileNode extends vscode.TreeItem {
 export class SceneNode extends vscode.TreeItem {
   constructor(
     public readonly filePath: string,
-    public readonly scene: OutlineScene
+    public readonly scene: OutlineScene,
+    checked: boolean = false
   ) {
     super(scene.name, vscode.TreeItemCollapsibleState.Expanded);
     this.contextValue = "manimDock.scene";
     this.description = scene.bases.join(", ");
     this.iconPath = new vscode.ThemeIcon("symbol-class");
+    this.checkboxState = checked
+      ? vscode.TreeItemCheckboxState.Checked
+      : vscode.TreeItemCheckboxState.Unchecked;
     this.command = {
       command: "manimDock.revealInEditor",
       title: "Reveal",
@@ -183,6 +187,8 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
   private _onDidChangeTreeData = new vscode.EventEmitter<OutlineNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
   private cache = new Map<string, FileOutline>();
+  /** Per-file scene names checked for concatenated render (session). */
+  private concatChecked = new Map<string, Set<string>>();
   private lastFilePath: string | undefined;
   private lastStatus: string | undefined;
 
@@ -198,6 +204,74 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
 
   getLastFilePath(): string | undefined {
     return this.lastFilePath;
+  }
+
+  isSceneChecked(filePath: string, sceneName: string): boolean {
+    return this.concatChecked.get(filePath)?.has(sceneName) ?? false;
+  }
+
+  setSceneChecked(filePath: string, sceneName: string, checked: boolean): void {
+    let set = this.concatChecked.get(filePath);
+    if (!set) {
+      set = new Set();
+      this.concatChecked.set(filePath, set);
+    }
+    if (checked) {
+      set.add(sceneName);
+    } else {
+      set.delete(sceneName);
+    }
+  }
+
+  /** Checked scenes in outline / file declaration order. */
+  getCheckedScenes(filePath: string): string[] {
+    const checked = this.concatChecked.get(filePath);
+    if (!checked?.size) {
+      return [];
+    }
+    const outline = this.cache.get(filePath);
+    if (!outline?.scenes.length) {
+      return [...checked];
+    }
+    return outline.scenes
+      .map((s) => s.name)
+      .filter((name) => checked.has(name));
+  }
+
+  async selectAllScenesForConcat(filePath?: string): Promise<number> {
+    const path = filePath ?? this.lastFilePath;
+    if (!path) {
+      return 0;
+    }
+    const outline = await this.loadOutline(path);
+    const set = new Set(outline.scenes.map((s) => s.name));
+    this.concatChecked.set(path, set);
+    this._onDidChangeTreeData.fire(undefined);
+    return set.size;
+  }
+
+  clearConcatSelection(filePath?: string): void {
+    const path = filePath ?? this.lastFilePath;
+    if (!path) {
+      this.concatChecked.clear();
+    } else {
+      this.concatChecked.delete(path);
+    }
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  /** Drop checks for scenes that no longer exist after a refresh/load. */
+  private pruneConcatSelection(filePath: string, outline: FileOutline): void {
+    const set = this.concatChecked.get(filePath);
+    if (!set?.size) {
+      return;
+    }
+    const live = new Set(outline.scenes.map((s) => s.name));
+    for (const name of [...set]) {
+      if (!live.has(name)) {
+        set.delete(name);
+      }
+    }
   }
 
   async resolvePythonOutline(): Promise<
@@ -276,8 +350,14 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
       if (!element.outline.scenes.length) {
         return [new StatusNode("No Scene subclasses in this file")];
       }
+      this.pruneConcatSelection(element.filePath, element.outline);
       return element.outline.scenes.map(
-        (scene) => new SceneNode(element.filePath, scene)
+        (scene) =>
+          new SceneNode(
+            element.filePath,
+            scene,
+            this.isSceneChecked(element.filePath, scene.name)
+          )
       );
     }
 
@@ -304,6 +384,7 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
     try {
       const outline = await this.sidecar.outline(filePath);
       this.cache.set(filePath, outline);
+      this.pruneConcatSelection(filePath, outline);
       if (!outline.errors.length && outline.scenes.length) {
         this.lastFilePath = filePath;
       }

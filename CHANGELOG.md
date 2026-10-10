@@ -1,6 +1,10 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.8`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.9`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.9
+
+- Outline scene checkboxes + **Render Concatenated Video**: re-render checked scenes (file order) at chosen quality, write `concat.txt` + `final.mp4` (requires `ffmpeg` on PATH)
 
 ## 0.2.8
 

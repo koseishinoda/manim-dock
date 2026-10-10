@@ -8,7 +8,9 @@ from manim_dock.render import (
     _extract_output_path,
     _find_newest_media,
     _quality_flag,
+    quality_media_dir,
     render_scene,
+    render_scenes,
     resolve_manim_cmd,
 )
 
@@ -136,6 +138,44 @@ class RenderHelperTests(unittest.TestCase):
         with mock.patch("manim_dock.render.subprocess.run", return_value=completed):
             result = render_scene(fake, "MinimalLesson", save_sections=True)
         self.assertIn("--save_sections", result.command)
+
+    def test_quality_media_dir(self) -> None:
+        self.assertEqual(quality_media_dir("l"), "480p15")
+        self.assertEqual(quality_media_dir("m"), "720p30")
+        self.assertEqual(quality_media_dir("h"), "1080p60")
+        self.assertEqual(quality_media_dir("k"), "2160p60")
+
+    def test_render_scenes_builds_multi_scene_argv(self) -> None:
+        fake = Path(__file__).resolve()
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "script.py"
+            script.write_text("from manim import *\nclass A(Scene):\n    pass\n", encoding="utf-8")
+            qdir = Path(tmp) / "media" / "videos" / "script" / "480p15"
+            qdir.mkdir(parents=True)
+            (qdir / "SceneA.mp4").write_bytes(b"a")
+            (qdir / "SceneB.mp4").write_bytes(b"b")
+            completed = mock.Mock(returncode=0, stdout="", stderr="")
+            with mock.patch(
+                "manim_dock.render.subprocess.run", return_value=completed
+            ) as run:
+                result = render_scenes(
+                    script, ["SceneA", "SceneB"], quality="l"
+                )
+            cmd = run.call_args.args[0]
+            self.assertIn("-ql", cmd)
+            self.assertEqual(cmd[-2:], ["SceneA", "SceneB"])
+            self.assertTrue(result.ok)
+            self.assertEqual(result.quality_dir, "480p15")
+            self.assertEqual(
+                [o.scene for o in result.outputs], ["SceneA", "SceneB"]
+            )
+            self.assertTrue(all(o.path for o in result.outputs))
+
+    def test_render_scenes_empty_names(self) -> None:
+        fake = Path(__file__).resolve()
+        result = render_scenes(fake, [], quality="l")
+        self.assertFalse(result.ok)
+        self.assertIn("no scene", result.error or "")
 
 
 if __name__ == "__main__":

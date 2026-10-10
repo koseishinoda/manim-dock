@@ -45,6 +45,22 @@ export interface RenderResult {
   error: string | null;
 }
 
+export interface SceneOutput {
+  scene: string;
+  path: string | null;
+}
+
+export interface MultiSceneRenderResult {
+  ok: boolean;
+  outputs: SceneOutput[];
+  command: string[];
+  cwd: string;
+  returncode: number | null;
+  log_tail: string;
+  error: string | null;
+  quality_dir: string;
+}
+
 export interface SnapshotResult {
   ok: boolean;
   path: string;
@@ -473,6 +489,22 @@ print(json.dumps(render_scene(
 `.trim();
 }
 
+function renderScenesInlineCode(pythonRoot: string): string {
+  return `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from manim_dock.render import render_scenes
+p = json.load(sys.stdin)
+print(json.dumps(render_scenes(
+    p["file_path"],
+    list(p.get("scene_names") or []),
+    quality=p.get("quality", "l"),
+    manim_cmd=[sys.executable, "-m", "manim"],
+    timeout=p.get("timeout"),
+).to_dict()))
+`.trim();
+}
+
 /** Tiny -c stub: params (incl. large source) arrive as JSON on stdin. */
 function snapshotAtLineInlineCode(pythonRoot: string): string {
   return `
@@ -895,6 +927,45 @@ export class SidecarClient {
       }
     }
     throw new Error(`render failed:\n${errors.join("\n")}`);
+  }
+
+  async renderScenes(
+    filePath: string,
+    sceneNames: string[],
+    quality: string = "l",
+    onLog?: (chunk: string) => void,
+    timeoutSec: number = 3600
+  ): Promise<MultiSceneRenderResult> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins(this.extensionPath);
+    const errors: string[] = [];
+    const hostTimeoutMs = Math.max(60_000, (timeoutSec + 30) * 1000);
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          return await runPythonJson<MultiSceneRenderResult>(
+            bin,
+            ["-c", renderScenesInlineCode(root)],
+            {
+              timeoutMs: hostTimeoutMs,
+              onLog,
+              stdin: JSON.stringify({
+                file_path: filePath,
+                scene_names: sceneNames,
+                quality,
+                timeout: timeoutSec,
+              }),
+            }
+          );
+        } catch (err) {
+          errors.push(`[${bin}] ${String(err)}`);
+        }
+      }
+    }
+    throw new Error(`render_scenes failed:\n${errors.join("\n")}`);
   }
 
   async debugReport(sampleFile?: string): Promise<string> {

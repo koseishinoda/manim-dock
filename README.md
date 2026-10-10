@@ -10,7 +10,7 @@ It docks Outline and a unified **Stage & Timeline** beside your normal Manim Pyt
 
 ## Status
 
-**Current:** [`v0.2.8`](https://github.com/koseishinoda/manim-dock/releases/tag/v0.2.8) — versioning is **git tags / GitHub Releases** only (see [CHANGELOG.md](CHANGELOG.md)).
+**Current:** [`v0.2.9`](https://github.com/koseishinoda/manim-dock/releases/tag/v0.2.9) — versioning is **git tags / GitHub Releases** only (see [CHANGELOG.md](CHANGELOG.md)).
 
 - Product docs: [architecture](docs/architecture.md) · [decisions](docs/decisions.md) · [sideview](docs/sideview.md)
 
@@ -19,6 +19,8 @@ Requires ManimCE for Stage stills and rendering. Dock prefers the current projec
 **Try Stage & Timeline:** open `examples/minimal_lesson/lesson.py` (or Nyquist) → Outline / command **Manim Dock: Open Stage & Timeline** → scrub; after ~1s a Manim still appears. Timeline edge-drag / reorder patches durations (confirm-diff, or `manimDock.patchMode` = `auto`).
 
 **Try render preview:** Outline → **Render Scene**. Animated scenes open as video; still-only scenes (`self.add` / no `play`) open as an image. Preview uses that scene's output, not leftover media from another class.
+
+**Try concatenated final:** check scenes in Outline → **Render Concatenated Video** → pick quality. Dock re-renders those scenes, writes `concat.txt` beside the script, stitches `final.mp4` with `ffmpeg` (must be on PATH).
 
 **Try templates:** Command **Manim Dock: Insert Template**, or copy from `templates/`, or **Scaffold Example Project**.
 

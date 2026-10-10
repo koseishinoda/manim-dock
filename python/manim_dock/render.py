@@ -64,6 +64,50 @@ def _quality_flag(quality: str) -> str:
     return f"-q{letter}"
 
 
+def quality_media_dir(quality: str) -> str:
+    """ManimCE media subdirectory for a quality letter (e.g. ``480p15``)."""
+    letter = _quality_flag(quality)[-1]
+    return {
+        "l": "480p15",
+        "m": "720p30",
+        "h": "1080p60",
+        "k": "2160p60",
+    }.get(letter, "480p15")
+
+
+@dataclass
+class SceneOutput:
+    scene: str
+    path: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MultiSceneRenderResult:
+    ok: bool
+    outputs: list[SceneOutput] = field(default_factory=list)
+    command: list[str] = field(default_factory=list)
+    cwd: str = ""
+    returncode: int | None = None
+    log_tail: str = ""
+    error: str | None = None
+    quality_dir: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "outputs": [o.to_dict() for o in self.outputs],
+            "command": self.command,
+            "cwd": self.cwd,
+            "returncode": self.returncode,
+            "log_tail": self.log_tail,
+            "error": self.error,
+            "quality_dir": self.quality_dir,
+        }
+
+
 def _extract_output_path(log: str) -> str | None:
     """Parse Manim's ``File ready at '…'`` line (including rich-console wrap)."""
     matches = FILE_READY_RE.findall(log)
@@ -443,4 +487,94 @@ def render_scene(
         returncode=proc.returncode,
         log_tail=log_tail,
         error=error,
+    )
+
+
+def render_scenes(
+    file_path: str | Path,
+    scene_names: list[str],
+    *,
+    quality: str = "l",
+    manim_cmd: list[str] | None = None,
+    timeout: int | None = 3600,
+) -> MultiSceneRenderResult:
+    """Render multiple scenes in one Manim invocation (concat pipeline)."""
+    path = Path(file_path).resolve()
+    qdir = quality_media_dir(quality)
+    if not path.is_file():
+        return MultiSceneRenderResult(
+            ok=False, error=f"file not found: {path}", quality_dir=qdir
+        )
+    names = [n for n in scene_names if isinstance(n, str) and n.strip()]
+    if not names:
+        return MultiSceneRenderResult(
+            ok=False, error="no scene names provided", quality_dir=qdir
+        )
+
+    cwd = path.parent
+    cmd = list(manim_cmd or resolve_manim_cmd())
+    cmd.append(_quality_flag(quality))
+    cmd.append(str(path))
+    cmd.extend(names)
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return MultiSceneRenderResult(
+            ok=False,
+            command=cmd,
+            cwd=str(cwd),
+            error="manim executable not found — install ManimCE or set PATH",
+            quality_dir=qdir,
+        )
+    except subprocess.TimeoutExpired:
+        return MultiSceneRenderResult(
+            ok=False,
+            command=cmd,
+            cwd=str(cwd),
+            error=f"render timed out after {timeout}s",
+            quality_dir=qdir,
+        )
+
+    log = "\n".join(
+        part for part in (proc.stdout or "", proc.stderr or "") if part
+    ).strip()
+    log_tail = log[-4000:] if len(log) > 4000 else log
+
+    media_root = cwd / "media"
+    expected_dir = media_root / "videos" / path.stem / qdir
+    outputs: list[SceneOutput] = []
+    for name in names:
+        candidate = expected_dir / f"{name}.mp4"
+        found: str | None = None
+        if candidate.is_file():
+            found = str(candidate.resolve())
+        else:
+            found = _find_newest_media(media_root, name)
+        outputs.append(SceneOutput(scene=name, path=found))
+
+    missing = [o.scene for o in outputs if not o.path]
+    ok = proc.returncode == 0 and not missing
+    error = None
+    if proc.returncode != 0:
+        error = f"manim exited with code {proc.returncode}"
+    elif missing:
+        error = f"missing output for: {', '.join(missing)}"
+
+    return MultiSceneRenderResult(
+        ok=ok,
+        outputs=outputs,
+        command=cmd,
+        cwd=str(cwd),
+        returncode=proc.returncode,
+        log_tail=log_tail,
+        error=error,
+        quality_dir=qdir,
     )

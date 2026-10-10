@@ -2,7 +2,7 @@
   "name": "manim-dock",
   "displayName": "Manim Dock",
   "description": "Dock Outline, Stage, and Timeline beside ManimCE Python for educational video production.",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "publisher": "manim-dock",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -65,6 +65,19 @@
         "command": "manimDock.renderScene",
         "title": "Manim Dock: Render Scene (QL)",
         "icon": "$(play)"
+      },
+      {
+        "command": "manimDock.renderConcatenated",
+        "title": "Manim Dock: Render Concatenated Video",
+        "icon": "$(combine)"
+      },
+      {
+        "command": "manimDock.selectAllScenesForConcat",
+        "title": "Manim Dock: Select All Scenes for Concat"
+      },
+      {
+        "command": "manimDock.clearConcatSelection",
+        "title": "Manim Dock: Clear Concat Selection"
       },
       {
         "command": "manimDock.renderWithSections",
@@ -137,6 +150,11 @@
           "group": "navigation"
         },
         {
+          "command": "manimDock.renderConcatenated",
+          "when": "view == manimDock.outline",
+          "group": "navigation"
+        },
+        {
           "command": "manimDock.renderWithSections",
           "when": "view == manimDock.outline",
           "group": "1_render"
@@ -169,6 +187,15 @@
         },
         {
           "command": "manimDock.renderMethod"
+        },
+        {
+          "command": "manimDock.renderConcatenated"
+        },
+        {
+          "command": "manimDock.selectAllScenesForConcat"
+        },
+        {
+          "command": "manimDock.clearConcatSelection"
         },
         {
           "command": "manimDock.openInSideview"

@@ -1,10 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
+import { runFfmpegConcat, writeConcatFile } from "./concatRender";
 import {
   asMethodTarget,
   asSceneTarget,
   OutlineProvider,
+  SceneNode,
   revealRange,
 } from "./outlineTree";
 import { ProposedPatchProvider } from "./patchConfirm";
@@ -25,6 +27,20 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: outlineProvider,
     showCollapseAll: true,
   });
+  context.subscriptions.push(
+    outlineTree.onDidChangeCheckboxState((e) => {
+      for (const [item, state] of e.items) {
+        if (!(item instanceof SceneNode)) {
+          continue;
+        }
+        outlineProvider.setSceneChecked(
+          item.filePath,
+          item.scene.name,
+          state === vscode.TreeItemCheckboxState.Checked
+        );
+      }
+    })
+  );
   ProposedPatchProvider.ensure(context);
   const patchModeStatus = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
@@ -77,6 +93,32 @@ export function activate(context: vscode.ExtensionContext): void {
       "manimDock.renderScene",
       async (item?: unknown) => {
         await renderSceneCommand(sidecar, outlineProvider, output, item);
+      }
+    ),
+    vscode.commands.registerCommand(
+      "manimDock.renderConcatenated",
+      async () => {
+        await renderConcatenatedCommand(sidecar, outlineProvider, output);
+      }
+    ),
+    vscode.commands.registerCommand(
+      "manimDock.selectAllScenesForConcat",
+      async () => {
+        const n = await outlineProvider.selectAllScenesForConcat();
+        void vscode.window.showInformationMessage(
+          n
+            ? `Manim Dock: selected ${n} scene(s) for concat`
+            : "Manim Dock: no scenes to select — open a Manim file and refresh Outline"
+        );
+      }
+    ),
+    vscode.commands.registerCommand(
+      "manimDock.clearConcatSelection",
+      () => {
+        outlineProvider.clearConcatSelection();
+        void vscode.window.showInformationMessage(
+          "Manim Dock: cleared concat selection"
+        );
       }
     ),
     vscode.commands.registerCommand(
@@ -900,6 +942,120 @@ function sectionNameFromOutlineEvent(label: string | undefined): string | undefi
     return label.trim();
   }
   return undefined;
+}
+
+async function pickRenderQuality(): Promise<string | undefined> {
+  const configured =
+    vscode.workspace.getConfiguration("manimDock").get<string>("renderQuality") ||
+    "l";
+  const items: vscode.QuickPickItem[] = [
+    { label: "l", description: "480p15 (fast preview)" },
+    { label: "m", description: "720p30" },
+    { label: "h", description: "1080p60" },
+    { label: "k", description: "2160p60" },
+  ];
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "Manim Dock: render quality",
+    placeHolder: `Default: ${configured}`,
+  });
+  return picked?.label ?? undefined;
+}
+
+async function renderConcatenatedCommand(
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const resolved = await outlineProvider.resolvePythonOutline();
+  if ("error" in resolved) {
+    output.appendLine(resolved.error);
+    void vscode.window.showErrorMessage(`Manim Dock: ${resolved.error}`);
+    return;
+  }
+  const { filePath } = resolved;
+  // Ensure outline is cached so getCheckedScenes sees declaration order.
+  await outlineProvider.resolvePythonOutline();
+  const scenes = outlineProvider.getCheckedScenes(filePath);
+  if (!scenes.length) {
+    void vscode.window.showErrorMessage(
+      "Manim Dock: check at least one scene in the Outline, then run Render Concatenated Video."
+    );
+    return;
+  }
+
+  const quality = await pickRenderQuality();
+  if (!quality) {
+    return;
+  }
+
+  const scriptDir = path.dirname(filePath);
+  const moduleStem = path.parse(filePath).name;
+
+  output.show(true);
+  output.appendLine(
+    `\n=== Render concat (${filePath}) quality=${quality} scenes=${scenes.join(", ")} ===`
+  );
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `Manim Dock: rendering ${scenes.length} scene(s)…`,
+      cancellable: false,
+    },
+    async () => {
+      try {
+        const result = await sidecar.renderScenes(
+          filePath,
+          scenes,
+          quality,
+          (chunk) => {
+            output.append(chunk);
+          }
+        );
+        if (result.log_tail) {
+          output.appendLine("\n--- manim log tail ---");
+          output.appendLine(result.log_tail);
+        }
+        if (!result.ok) {
+          void vscode.window.showErrorMessage(
+            `Manim Dock concat render failed: ${result.error ?? "unknown"}. See “Manim Dock” output.`
+          );
+          return;
+        }
+
+        const concatPath = writeConcatFile(
+          scriptDir,
+          moduleStem,
+          quality,
+          scenes
+        );
+        output.appendLine(`Wrote ${concatPath}`);
+
+        const ff = await runFfmpegConcat(scriptDir);
+        if (ff.log) {
+          output.appendLine("\n--- ffmpeg ---");
+          output.appendLine(ff.log.slice(-2000));
+        }
+        if (!ff.ok) {
+          void vscode.window.showErrorMessage(
+            `Manim Dock: ${ff.error ?? "ffmpeg failed"}. See “Manim Dock” output.`
+          );
+          return;
+        }
+
+        PreviewPanel.show(ff.outputPath, "final.mp4");
+        void vscode.window.showInformationMessage(
+          `Manim Dock: wrote final.mp4 (${scenes.length} scenes)`
+        );
+        output.appendLine(`OK ${ff.outputPath}`);
+      } catch (err) {
+        output.appendLine(String(err));
+        void vscode.window.showErrorMessage(
+          `Manim Dock concat failed: ${String(err)}`
+        );
+      }
+    }
+  );
 }
 
 async function renderSceneCommand(
