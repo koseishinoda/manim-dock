@@ -83,6 +83,11 @@ function fmt(n) {
 }
 
 function isBeat(ev) {
+  return ev.kind === 'play' || ev.kind === 'wait' || ev.kind === 'add';
+}
+
+/** Duration/reorder patches only apply to play/wait — not static add beats. */
+function isReorderableBeat(ev) {
   return ev.kind === 'play' || ev.kind === 'wait';
 }
 
@@ -436,11 +441,11 @@ function rebuildTimeline() {
 
     const label = document.createElement('div');
     label.className = 'label';
-    const dragHint = isBeat(ev)
+    const dragHint = isReorderableBeat(ev)
       ? ' · drag to reorder within this section'
       : (ev.kind === 'next_section'
         ? ' · drag this section group to swap with a neighbor'
-        : '');
+        : (ev.kind === 'add' ? ' · static add (scrub only)' : ''));
     const targetHint = (ev.targets && ev.targets.length)
       ? ' targets: ' + ev.targets.join(', ')
       : '';
@@ -497,6 +502,9 @@ function rebuildTimeline() {
     dur.className = 'dur';
     if (ev.kind === 'next_section') {
       dur.textContent = '';
+    } else if (ev.kind === 'add') {
+      dur.textContent = '—';
+      dur.title = ev.note || 'static add — Stage scrub only';
     } else {
       dur.textContent = fmt(ev.duration || 0) + 's';
       if (!ev.editable) dur.title = ev.note || 'not editable';
@@ -568,15 +576,19 @@ function rebuildTimeline() {
       }
     }
 
-    const beatList = g.beats.map((b) => b.ev);
-    g.beats.forEach((b, beatPos) => {
+    const reorderable = g.beats.filter((b) => isReorderableBeat(b.ev));
+    const beatList = reorderable.map((b) => b.ev);
+    g.beats.forEach((b) => {
       const beatRow = buildRow(b.ev, b.index);
-      beatRow.dataset.sortKind = 'beat';
-      bindBeatSortable(beatRow, {
-        pos: beatPos,
-        section: eventSection(b.ev),
-        list: beatList
-      });
+      if (isReorderableBeat(b.ev)) {
+        const beatPos = reorderable.indexOf(b);
+        beatRow.dataset.sortKind = 'beat';
+        bindBeatSortable(beatRow, {
+          pos: beatPos,
+          section: eventSection(b.ev),
+          list: beatList
+        });
+      }
       groupEl.appendChild(beatRow);
     });
 
@@ -624,7 +636,7 @@ function highlightTimelineLine(line) {
       dist = Math.min(Math.abs(line - start), Math.abs(line - end));
       if (dist > 3) return;
     }
-    const kindPenalty = (kind === 'play' || kind === 'wait') ? 0 : 0.4;
+    const kindPenalty = (kind === 'play' || kind === 'wait' || kind === 'add') ? 0 : 0.4;
     const score = dist + kindPenalty;
     if (score < bestScore) {
       best = row;

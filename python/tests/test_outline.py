@@ -57,6 +57,23 @@ class Demo(Scene):
     assert play.label == "Write title"
 
 
+def test_add_outline_events():
+    source = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        title = Text("Hi")
+        self.add(title)
+        self.play(Write(title))
+'''
+    outline = parse_source(source, path="<add>")
+    events = outline.scenes[0].methods[0].events
+    assert [e.kind for e in events] == ["add", "play"]
+    assert events[0].targets == ["title"]
+    assert events[0].label == "add(title)"
+
+
 def test_syntax_error_reports_without_crash():
     outline = parse_source("class Broken(Scene):\n    def construct(self)\n", path="<bad>")
     assert outline.errors

@@ -22,7 +22,7 @@ class SourceRange:
 
 @dataclass
 class PlayOrWait:
-    kind: str  # "play" | "wait" | "next_section" | "other"
+    kind: str  # "play" | "wait" | "add" | "next_section" | "other"
     label: str
     range: SourceRange
     targets: list[str] = field(default_factory=list)
@@ -113,7 +113,7 @@ def _call_name(node: ast.Call) -> str | None:
 
 
 def _event_from_call(node: ast.Call) -> PlayOrWait | None:
-    from manim_dock.timeline import play_call_label
+    from manim_dock.timeline import add_call_label, play_call_label
 
     name = _call_name(node)
     if name is None:
@@ -121,6 +121,9 @@ def _event_from_call(node: ast.Call) -> PlayOrWait | None:
     if name == "play":
         targets, label = play_call_label(node)
         return PlayOrWait("play", label, _line_range(node), targets=targets)
+    if name == "add":
+        targets, label = add_call_label(node)
+        return PlayOrWait("add", label, _line_range(node), targets=targets)
     if name == "wait":
         label = "self.wait(...)"
         if node.args:

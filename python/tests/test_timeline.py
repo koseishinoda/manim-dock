@@ -105,3 +105,29 @@ class Demo(Scene):
     assert plays[0].targets == ["hyp"]
     assert "LaggedStart" in plays[0].label
     assert "hyp" in plays[0].label
+
+
+def test_add_beats_are_static_scrub_slots():
+    from manim_dock.timeline import ADD_BEAT_DURATION
+
+    source = """
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        title = Text("Hi")
+        box = Square()
+        self.add(title, box)
+        self.play(Write(title))
+        self.wait(0.2)
+"""
+    tl = parse_scene_timeline(source, "<mem>", "Demo")
+    assert not tl.errors
+    kinds = [e.kind for e in tl.events]
+    assert kinds == ["add", "play", "wait"]
+    add = tl.events[0]
+    assert add.label == "add(title, box)"
+    assert add.targets == ["title", "box"]
+    assert not add.editable
+    assert abs(add.duration - ADD_BEAT_DURATION) < 1e-9
+    assert abs(tl.events[1].start - ADD_BEAT_DURATION) < 1e-9

@@ -98,7 +98,9 @@ class EventNode extends vscode.TreeItem {
         ? "bookmark"
         : event.kind === "wait"
           ? "debug-pause"
-          : "play"
+          : event.kind === "add"
+            ? "diff-added"
+            : "play"
     );
     this.command = {
       command: "manimDock.revealInEditor",

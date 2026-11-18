@@ -281,7 +281,7 @@ export class StageTimelinePanel {
     this.scheduleSnapshot(line);
   }
 
-  /** Timeline time for a 1-based source line (section / play / wait). */
+  /** Timeline time for a 1-based source line (section / play / wait / add). */
   private timeAtSourceLine(line: number): number | undefined {
     const events = this.timeline?.events ?? [];
     let best: TimelineEvent | undefined;
@@ -303,7 +303,11 @@ export class StageTimelinePanel {
       }
       // Prefer section markers and beats over other kinds when tied.
       const kindBonus =
-        ev.kind === "next_section" ? 0 : ev.kind === "play" || ev.kind === "wait" ? 0.05 : 0.2;
+        ev.kind === "next_section"
+          ? 0
+          : ev.kind === "play" || ev.kind === "wait" || ev.kind === "add"
+            ? 0.05
+            : 0.2;
       const score = dist + kindBonus;
       if (score < bestScore) {
         bestScore = score;
@@ -738,6 +742,7 @@ export class StageTimelinePanel {
     .block { position: absolute; top: 1px; bottom: 1px; border-radius: 2px; box-sizing: border-box; }
     .block.play { background: #2d4a6f; border: 1px solid #7eb6ff; }
     .block.wait { background: #3d3a2d; border: 1px solid #c9b56a; }
+    .block.add { background: #2d3d35; border: 1px solid #7ec9a0; }
     .block.section { background: transparent; border-left: 2px solid #888; width: 0 !important; min-width: 0; padding: 0; }
     .block.locked { opacity: 0.55; }
     .handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }

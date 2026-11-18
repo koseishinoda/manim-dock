@@ -1,7 +1,8 @@
-"""Transient Timeline view model: play / wait / section beats with durations.
+"""Transient Timeline view model: play / wait / add / section beats.
 
 Uses stdlib ``ast`` only. Durations are read from literals (and simple module
-constants); the timeline is a view, never project truth.
+constants); ``self.add`` gets a tiny virtual duration for Stage scrub spacing
+only (not editable). The timeline is a view, never project truth.
 """
 
 from __future__ import annotations
@@ -16,10 +17,15 @@ from manim_dock.outline import SourceRange, _call_name, _line_range
 DEFAULT_PLAY_RUNTIME = 1.0
 
 
+# Virtual duration so static ``self.add`` beats spread on the scrub strip.
+# Not Manim wall-clock time; not duration-editable.
+ADD_BEAT_DURATION = 0.05
+
+
 @dataclass
 class TimelineEvent:
     id: str
-    kind: str  # play | wait | next_section
+    kind: str  # play | wait | add | next_section
     label: str
     method: str
     range: SourceRange
@@ -273,6 +279,31 @@ def play_call_label(call: ast.Call) -> tuple[list[str], str]:
     return _play_targets_and_label(call)
 
 
+def _add_targets_and_label(call: ast.Call) -> tuple[list[str], str]:
+    """Bindings and label for ``self.add(...)`` (static layout beats)."""
+    targets: list[str] = []
+    for arg in call.args:
+        n = _expr_binding_name(arg)
+        if n:
+            targets.append(n)
+    targets = _unique_preserve(targets)
+    if targets:
+        label = f"add({', '.join(targets)})"
+    elif call.args:
+        try:
+            label = f"add({ast.unparse(call.args[0])})"
+        except Exception:
+            label = "add(...)"
+    else:
+        label = "add(...)"
+    return targets, label
+
+
+def add_call_label(call: ast.Call) -> tuple[list[str], str]:
+    """Public helper for Outline (and Timeline) add-event labels + targets."""
+    return _add_targets_and_label(call)
+
+
 def _methods_by_name(
     class_def: ast.ClassDef,
 ) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -321,7 +352,7 @@ def _expand_method(
             name = _call_name(call)
             if name is None:
                 continue
-            if name in {"play", "wait", "next_section"}:
+            if name in {"play", "wait", "add", "next_section"}:
                 counter[0] += 1
                 eid = f"e{counter[0]}"
                 rng = _line_range(call)
@@ -366,6 +397,25 @@ def _expand_method(
                         )
                     )
                     t += dur
+                elif name == "add":
+                    targets, label = _add_targets_and_label(call)
+                    events.append(
+                        TimelineEvent(
+                            id=eid,
+                            kind="add",
+                            label=label,
+                            method=method_name,
+                            range=rng,
+                            start=t,
+                            duration=ADD_BEAT_DURATION,
+                            editable=False,
+                            duration_source="n/a",
+                            note="static add — Stage scrub only; not timed",
+                            section=current_section[0],
+                            targets=targets,
+                        )
+                    )
+                    t += ADD_BEAT_DURATION
                 else:  # play
                     dur, source, editable, note = _play_runtime(call, constants)
                     targets, label = _play_targets_and_label(call)

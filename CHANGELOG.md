@@ -1,6 +1,10 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.9`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.10`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.10
+
+- Timeline / Stage / Outline treat `self.add(...)` as static beats (scrub spacing only; not duration-editable or reorderable)
 
 ## 0.2.9
 
