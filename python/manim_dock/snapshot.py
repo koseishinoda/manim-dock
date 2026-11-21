@@ -1,17 +1,25 @@
 """ManimCE still capture for Stage at a source line (Phase 12).
 
 Uses a temp sibling file + ``raise EndSceneEarlyException`` after the until-line
-statement, then ``manim -ql -s`` (save last frame). Does not rewrite the user's
-on-disk scene. Uninstall-safe — no plugin Scene base class.
+statement, then in-process last-frame render (preferred) or ``manim -ql -s``.
+Does not rewrite the user's on-disk scene. Uninstall-safe — no plugin Scene base
+class.
+
+Cache keys use a **construct prefix digest** (plus local import fingerprint) so
+edits after the cursor / in other scene classes do not invalidate earlier stills.
 
 Intentionally does **not** import ``manim_dock.render`` (libcst): still capture
-only needs stdlib + a Manim-capable interpreter (``python -m manim``).
+only needs stdlib + a Manim-capable interpreter.
 """
 
 from __future__ import annotations
 
 import ast
+import contextlib
+import copy
 import hashlib
+import importlib.util
+import io
 import shutil
 import subprocess
 import sys
@@ -20,7 +28,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SNAPSHOT_VERSION = "v3"
+SNAPSHOT_VERSION = "v4-prefix"
 DEFAULT_TIMEOUT = 60
 EARLY_EXIT_IMPORT = "from manim.utils.exceptions import EndSceneEarlyException"
 
@@ -85,9 +93,171 @@ class SnapshotResult:
     returncode: int | None = None
     log_tail: str = ""
     error: str | None = None
+    #: ``cache`` | ``inprocess`` | ``cli`` | ```` — how the PNG was produced.
+    engine: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _stmt_contains(root: ast.AST, target: ast.AST) -> bool:
+    for node in ast.walk(root):
+        if node is target:
+            return True
+    return False
+
+
+def _truncate_stmt_list(
+    stmts: list[ast.stmt], anchor: ast.AST, past: list[bool]
+) -> list[ast.stmt]:
+    """Keep statements that run at or before ``anchor``; drop the rest."""
+    if past[0]:
+        return []
+    out: list[ast.stmt] = []
+    for stmt in stmts:
+        if past[0]:
+            break
+        if stmt is anchor:
+            out.append(stmt)
+            past[0] = True
+            break
+        if _stmt_contains(stmt, anchor):
+            out.append(_truncate_node(stmt, anchor, past))
+            past[0] = True
+            break
+        out.append(stmt)
+    return out
+
+
+def _truncate_node(stmt: ast.stmt, anchor: ast.AST, past: list[bool]) -> ast.stmt:
+    """Return a copy of ``stmt`` with bodies truncated at ``anchor``."""
+    cloned = copy.copy(stmt)
+    for field_name, value in ast.iter_fields(stmt):
+        if (
+            field_name in {"body", "orelse", "finalbody"}
+            and isinstance(value, list)
+            and value
+            and isinstance(value[0], ast.stmt)
+        ):
+            setattr(
+                cloned,
+                field_name,
+                _truncate_stmt_list(value, anchor, past),
+            )
+        elif field_name == "handlers" and isinstance(value, list):
+            new_handlers: list[ast.AST] = []
+            for handler in value:
+                if past[0]:
+                    break
+                if handler is anchor or _stmt_contains(handler, anchor):
+                    new_handlers.append(_truncate_node(handler, anchor, past))
+                    past[0] = True
+                    break
+                new_handlers.append(handler)
+            setattr(cloned, field_name, new_handlers)
+    return cloned
+
+
+def construct_prefix_canonical(
+    source: str, scene_name: str, active_until_line: int
+) -> str:
+    """Canonical AST bytes for the scene construct prefix through the Stage anchor.
+
+    Edits after the anchor, or in other scene classes in the same file, do not
+    change this string. Whitespace-only / comment-only edits outside the kept
+    AST also do not (``ast.dump`` without attributes).
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return f"SYNTAX_ERROR\0{exc}"
+
+    if not isinstance(tree, ast.Module):
+        return "NOT_MODULE"
+
+    bits: list[str] = [f"scene={scene_name}", f"until={active_until_line}"]
+
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            bits.append(ast.dump(node, include_attributes=False))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Assign, ast.AnnAssign)):
+            # Module-level helpers / constants in the same file.
+            bits.append(ast.dump(node, include_attributes=False))
+        elif isinstance(node, ast.ClassDef) and node.name == scene_name:
+            construct = None
+            for item in node.body:
+                if _is_construct(item):
+                    construct = item
+                    break
+            if construct is None:
+                bits.append(ast.dump(node, include_attributes=False))
+                continue
+
+            if active_until_line < 1:
+                new_body_stmts: list[ast.stmt] = []
+            else:
+                anchor = _find_anchor_in_construct(construct, active_until_line)
+                past = [False]
+                if anchor is None:
+                    # Class attribute / above construct → same as empty prefix.
+                    new_body_stmts = []
+                else:
+                    _body, _idx = anchor
+                    new_body_stmts = _truncate_stmt_list(
+                        list(construct.body),
+                        _body[_idx],
+                        past,
+                    )
+
+            new_construct = copy.copy(construct)
+            new_construct.body = new_body_stmts
+            class_body: list[ast.stmt] = []
+            for item in node.body:
+                if item is construct:
+                    class_body.append(new_construct)
+                else:
+                    class_body.append(item)
+            scene_cls = copy.copy(node)
+            scene_cls.body = class_body
+            bits.append(ast.dump(scene_cls, include_attributes=False))
+
+    return "\n".join(bits)
+
+
+def local_import_fingerprint(file_path: str | Path | None, source: str) -> str:
+    """Hash mtimes of same-directory modules imported by ``source``."""
+    if file_path is None:
+        return "nopath"
+    path = Path(file_path)
+    cwd = path.parent if path.suffix else path
+    if not cwd.is_dir():
+        return "nodir"
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return "syntax"
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                # relative — resolve first segment against cwd
+                if node.module:
+                    names.add(node.module.split(".")[0])
+            elif node.module:
+                names.add(node.module.split(".")[0])
+    parts: list[str] = []
+    for name in sorted(names):
+        candidate = cwd / f"{name}.py"
+        if candidate.is_file():
+            try:
+                st = candidate.stat()
+                parts.append(f"{candidate.name}:{st.st_mtime_ns}:{st.st_size}")
+            except OSError:
+                continue
+    return "|".join(parts) if parts else "nolocal"
 
 
 def snapshot_cache_key(
@@ -96,14 +266,19 @@ def snapshot_cache_key(
     active_until_line: int,
     *,
     quality: str = "l",
+    file_path: str | Path | None = None,
 ) -> str:
+    """Content-addressed key for a Stage still (prefix digest, not whole file)."""
+    prefix = construct_prefix_canonical(source, scene_name, active_until_line)
+    imports = local_import_fingerprint(file_path, source)
     payload = "\0".join(
         [
-            source,
+            SNAPSHOT_VERSION,
+            (quality or "l").strip().lower(),
             scene_name,
             str(active_until_line),
-            (quality or "l").strip().lower(),
-            SNAPSHOT_VERSION,
+            prefix,
+            imports,
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -365,78 +540,150 @@ def inject_early_exit(
     return ast.unparse(tree)
 
 
-def snapshot_at_line(
-    file_path: str | Path,
-    scene_name: str,
-    active_until_line: int,
-    *,
-    source: str | None = None,
-    quality: str = "l",
-    timeout: int | None = DEFAULT_TIMEOUT,
-    cache_dir: str | Path | None = None,
-    manim_cmd: list[str] | None = None,
+def _quality_tempconfig(quality: str) -> str:
+    q = (quality or "l").strip().lower()
+    return {
+        "l": "low_quality",
+        "low": "low_quality",
+        "ql": "low_quality",
+        "m": "medium_quality",
+        "medium": "medium_quality",
+        "h": "high_quality",
+        "high": "high_quality",
+        "k": "fourk_quality",
+        "4k": "fourk_quality",
+    }.get(q, "low_quality")
+
+
+def _finish_cached_png(
+    base: SnapshotResult, src_png: Path, cached_png: Path, *, engine: str
 ) -> SnapshotResult:
-    path = Path(file_path).resolve()
-    cwd = path.parent if path.is_file() else Path.cwd()
-
-    if source is None:
-        if not path.is_file():
-            return SnapshotResult(
-                ok=False,
-                path=str(path),
-                scene=scene_name,
-                active_until_line=active_until_line,
-                quality=quality,
-                error=f"file not found: {path}",
-            )
-        try:
-            source = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            return SnapshotResult(
-                ok=False,
-                path=str(path),
-                scene=scene_name,
-                active_until_line=active_until_line,
-                quality=quality,
-                error=str(exc),
-            )
-
-    key = snapshot_cache_key(
-        source, scene_name, active_until_line, quality=quality
-    )
-    cache_root = Path(cache_dir) if cache_dir else _default_cache_dir()
-    cache_root.mkdir(parents=True, exist_ok=True)
-    cached_png = cache_root / f"{key}.png"
-
-    base = SnapshotResult(
-        ok=False,
-        path=str(path),
-        scene=scene_name,
-        active_until_line=active_until_line,
-        quality=quality,
-        cache_key=key,
-    )
-
-    if cached_png.is_file() and cached_png.stat().st_size > 0:
-        w, h = _png_size(cached_png)
-        base.ok = True
-        base.cached = True
-        base.png_path = str(cached_png.resolve())
-        base.width = w
-        base.height = h
-        return base
-
     try:
-        transformed = inject_early_exit(
-            source, active_until_line, scene_name=scene_name
-        )
-    except (SyntaxError, ValueError) as exc:
-        base.error = f"snapshot transform failed: {exc}"
-        return base
+        shutil.copy2(src_png, cached_png)
+        png_path = cached_png
+    except OSError:
+        png_path = src_png
+    w, h = _png_size(png_path)
+    base.ok = True
+    base.engine = engine
+    base.png_path = str(png_path.resolve())
+    base.width = w
+    base.height = h
+    return base
 
-    # Need a real path for Manim cwd/imports; write beside source file when possible.
-    write_cwd = cwd if path.is_file() else Path.cwd()
-    write_path = path if path.is_file() else write_cwd / f"{scene_name}.py"
+
+def _capture_inprocess(
+    *,
+    write_cwd: Path,
+    write_path: Path,
+    transformed: str,
+    scene_name: str,
+    quality: str,
+    cached_png: Path,
+    base: SnapshotResult,
+) -> SnapshotResult | None:
+    """Render last frame in-process. Returns None if Manim is unavailable."""
+    try:
+        from manim import tempconfig  # type: ignore[import-not-found]
+        from manim.utils.exceptions import (  # type: ignore[import-not-found]
+            EndSceneEarlyException,
+        )
+    except Exception:
+        return None
+
+    temp_path: Path | None = None
+    media_root = cached_png.parent / f".inproc_{cached_png.stem[:16]}"
+    try:
+        temp_path = _write_temp_render_source(
+            write_cwd, write_path, transformed, prefix_tag="snapip"
+        )
+        mod_name = f"manim_dock_snap_{cached_png.stem[:20]}"
+        spec = importlib.util.spec_from_file_location(mod_name, temp_path)
+        if spec is None or spec.loader is None:
+            base.error = "failed to load temp snapshot module"
+            return base
+        module = importlib.util.module_from_spec(spec)
+        # Ensure project cwd imports resolve during exec_module.
+        sys_path_prefix = str(write_cwd)
+        inserted = False
+        if sys_path_prefix not in sys.path:
+            sys.path.insert(0, sys_path_prefix)
+            inserted = True
+        prev_cwd = Path.cwd()
+        try:
+            os_chdir = __import__("os").chdir
+            os_chdir(write_cwd)
+            spec.loader.exec_module(module)
+            scene_cls = getattr(module, scene_name, None)
+            if scene_cls is None:
+                base.error = f"scene class not found after load: {scene_name}"
+                return base
+            media_root.mkdir(parents=True, exist_ok=True)
+            cfg = {
+                "quality": _quality_tempconfig(quality),
+                "save_last_frame": True,
+                "preview": False,
+                "verbosity": "ERROR",
+                "media_dir": str(media_root),
+                "disable_caching": True,
+            }
+            base.command = ["inprocess", scene_name, str(temp_path)]
+            # Keep stdout clean for stdio RPC workers (Manim logs → buffer).
+            log_buf = io.StringIO()
+            with tempconfig(cfg), contextlib.redirect_stdout(log_buf):
+                scene = scene_cls()
+                try:
+                    scene.render()
+                except EndSceneEarlyException:
+                    # Some Manim versions surface this; render usually catches it.
+                    pass
+            captured = log_buf.getvalue().strip()
+            if captured:
+                base.log_tail = captured[-4000:]
+        finally:
+            __import__("os").chdir(prev_cwd)
+            if inserted:
+                try:
+                    sys.path.remove(sys_path_prefix)
+                except ValueError:
+                    pass
+            sys.modules.pop(mod_name, None)
+
+        png = _find_newest_png(media_root, scene_name)
+        if not png:
+            base.error = "in-process snapshot finished but PNG was not found"
+            return base
+        src = Path(png)
+        if not src.is_file():
+            base.error = f"PNG missing: {png}"
+            return base
+        return _finish_cached_png(base, src, cached_png, engine="inprocess")
+    except Exception as exc:  # noqa: BLE001 — surface to Stage
+        base.error = f"in-process snapshot failed: {exc}"
+        return base
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        # Keep media_root for debugging hard failures; prune empty trees lightly.
+        try:
+            if media_root.is_dir() and not any(media_root.rglob("*.png")):
+                shutil.rmtree(media_root, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def _capture_via_cli(
+    *,
+    write_cwd: Path,
+    write_path: Path,
+    transformed: str,
+    scene_name: str,
+    quality: str,
+    timeout: int,
+    manim_cmd: list[str] | None,
+    cached_png: Path,
+    base: SnapshotResult,
+) -> SnapshotResult:
     temp_path: Path | None = None
     try:
         temp_path = _write_temp_render_source(
@@ -448,25 +695,24 @@ def snapshot_at_line(
 
     cmd = list(manim_cmd or resolve_manim_cmd())
     cmd.append(_quality_flag(quality))
-    cmd.append("-s")  # save last frame (PNG); skips animation encoding
+    cmd.append("-s")
     cmd.extend([str(temp_path), scene_name])
     base.command = cmd
 
-    effective_timeout = DEFAULT_TIMEOUT if timeout is None else timeout
     try:
         proc = subprocess.run(
             cmd,
             cwd=str(write_cwd),
             capture_output=True,
             text=True,
-            timeout=effective_timeout,
+            timeout=timeout,
             check=False,
         )
     except FileNotFoundError:
         base.error = "manim executable not found — install ManimCE or set PATH"
         return base
     except subprocess.TimeoutExpired:
-        base.error = f"snapshot timed out after {effective_timeout}s"
+        base.error = f"snapshot timed out after {timeout}s"
         return base
     finally:
         if temp_path is not None:
@@ -494,15 +740,126 @@ def snapshot_at_line(
         base.error = f"PNG missing: {output}"
         return base
 
-    try:
-        shutil.copy2(src_png, cached_png)
-        png_path = cached_png
-    except OSError:
-        png_path = src_png
+    return _finish_cached_png(base, src_png, cached_png, engine="cli")
 
-    w, h = _png_size(png_path)
-    base.ok = True
-    base.png_path = str(png_path.resolve())
-    base.width = w
-    base.height = h
-    return base
+
+def snapshot_at_line(
+    file_path: str | Path,
+    scene_name: str,
+    active_until_line: int,
+    *,
+    source: str | None = None,
+    quality: str = "l",
+    timeout: int | None = DEFAULT_TIMEOUT,
+    cache_dir: str | Path | None = None,
+    manim_cmd: list[str] | None = None,
+    prefer_inprocess: bool = True,
+    skip_until_section: str | None = None,
+) -> SnapshotResult:
+    path = Path(file_path).resolve()
+    cwd = path.parent if path.is_file() else Path.cwd()
+
+    if source is None:
+        if not path.is_file():
+            return SnapshotResult(
+                ok=False,
+                path=str(path),
+                scene=scene_name,
+                active_until_line=active_until_line,
+                quality=quality,
+                error=f"file not found: {path}",
+            )
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return SnapshotResult(
+                ok=False,
+                path=str(path),
+                scene=scene_name,
+                active_until_line=active_until_line,
+                quality=quality,
+                error=str(exc),
+            )
+
+    key = snapshot_cache_key(
+        source,
+        scene_name,
+        active_until_line,
+        quality=quality,
+        file_path=path,
+    )
+    cache_root = Path(cache_dir) if cache_dir else _default_cache_dir()
+    cache_root.mkdir(parents=True, exist_ok=True)
+    cached_png = cache_root / f"{key}.png"
+
+    base = SnapshotResult(
+        ok=False,
+        path=str(path),
+        scene=scene_name,
+        active_until_line=active_until_line,
+        quality=quality,
+        cache_key=key,
+    )
+
+    if cached_png.is_file() and cached_png.stat().st_size > 0:
+        w, h = _png_size(cached_png)
+        base.ok = True
+        base.cached = True
+        base.engine = "cache"
+        base.png_path = str(cached_png.resolve())
+        base.width = w
+        base.height = h
+        return base
+
+    try:
+        transformed = inject_early_exit(
+            source, active_until_line, scene_name=scene_name
+        )
+    except (SyntaxError, ValueError) as exc:
+        base.error = f"snapshot transform failed: {exc}"
+        return base
+
+    # P2-lite: skip prior section animations before the early exit (same final still).
+    if skip_until_section:
+        try:
+            from manim_dock.render import _apply_skip_until_section
+
+            transformed = _apply_skip_until_section(
+                transformed, skip_until_section
+            )
+        except ValueError:
+            pass
+        except Exception:  # noqa: BLE001 — never block Stage on skip transform
+            pass
+
+    write_cwd = cwd if path.is_file() else Path.cwd()
+    write_path = path if path.is_file() else write_cwd / f"{scene_name}.py"
+    effective_timeout = DEFAULT_TIMEOUT if timeout is None else timeout
+
+    if prefer_inprocess:
+        inproc = _capture_inprocess(
+            write_cwd=write_cwd,
+            write_path=write_path,
+            transformed=transformed,
+            scene_name=scene_name,
+            quality=quality,
+            cached_png=cached_png,
+            base=base,
+        )
+        if inproc is not None and inproc.ok:
+            return inproc
+        # Manim missing → fall through to CLI. Soft in-process failure also falls back.
+        if inproc is not None and inproc.error and "not found after load" in inproc.error:
+            return inproc
+
+    return _capture_via_cli(
+        write_cwd=write_cwd,
+        write_path=write_path,
+        transformed=transformed,
+        scene_name=scene_name,
+        quality=quality,
+        timeout=effective_timeout,
+        manim_cmd=manim_cmd,
+        cached_png=cached_png,
+        base=base,
+    )

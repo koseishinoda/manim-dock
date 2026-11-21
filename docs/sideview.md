@@ -20,7 +20,7 @@ Manim Dock and [Manim Sideview](https://marketplace.visualstudio.com/items?itemN
 
 1. Edit normal ManimCE `.py` in the editor (shared source of truth).
 2. Use Dock Outline / Stage & Timeline for stills, pacing, and patches.
-3. Use Dock **Render Scene (QL)** (or section-/method-aware sidecar render) for a fast check from Dock.
+3. Use Dock **Render Section (QL)** for a fast check (current `next_section` chapter); **Render Full Scene** when you need the whole class.
 4. Use Sideview when you want its richer preview, quality controls, or gallery insert workflow.
 5. Or run **Manim Dock: Open in Sideview** — Dock activates Sideview’s `manim-sideview.run` when installed, otherwise offers the Marketplace link.
 

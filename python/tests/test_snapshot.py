@@ -181,12 +181,34 @@ def test_cache_key_stable_and_sensitive():
     b = snapshot_cache_key(SAMPLE, "Demo", 12, quality="l")
     assert a == b
     assert a != snapshot_cache_key(SAMPLE, "Demo", 13, quality="l")
-    assert a != snapshot_cache_key(SAMPLE + "\n", "Demo", 12, quality="l")
+    # Trailing whitespace / blank line after construct must not thrash the key.
+    assert a == snapshot_cache_key(SAMPLE + "\n", "Demo", 12, quality="l")
     assert a != snapshot_cache_key(SAMPLE, "Other", 12, quality="l")
 
 
+def test_cache_key_ignores_later_scene_and_suffix_edits():
+    from manim_dock.snapshot import construct_prefix_canonical
+
+    write_line = next(
+        i for i, line in enumerate(SAMPLE.splitlines(), 1) if "Write(title)" in line
+    )
+    base = construct_prefix_canonical(SAMPLE, "Demo", write_line)
+    # Edit after the Write play — wait duration — should change prefix at wait line
+    # but not at the Write line if wait is after Write.
+    edited_wait = SAMPLE.replace("self.wait(0.5)", "self.wait(1.5)")
+    assert construct_prefix_canonical(edited_wait, "Demo", write_line) == base
+    # Other scene class in the same file must not affect Demo's key.
+    with_other = SAMPLE + "\n\nclass Other(Scene):\n    def construct(self):\n        self.wait(9)\n"
+    assert construct_prefix_canonical(with_other, "Demo", write_line) == base
+    assert snapshot_cache_key(SAMPLE, "Demo", write_line) == snapshot_cache_key(
+        with_other, "Demo", write_line
+    )
+
+
 def test_snapshot_cache_hit_skips_manim(tmp_path: Path):
-    key = snapshot_cache_key(SAMPLE, "Demo", 10, quality="l")
+    key = snapshot_cache_key(
+        SAMPLE, "Demo", 10, quality="l", file_path=tmp_path / "demo.py"
+    )
     png = tmp_path / f"{key}.png"
     # Minimal valid PNG (1x1)
     png.write_bytes(
@@ -196,16 +218,19 @@ def test_snapshot_cache_hit_skips_manim(tmp_path: Path):
         )
     )
     with patch("manim_dock.snapshot.subprocess.run") as run:
-        result = snapshot_at_line(
-            tmp_path / "demo.py",
-            "Demo",
-            10,
-            source=SAMPLE,
-            cache_dir=tmp_path,
-        )
-        run.assert_not_called()
+        with patch("manim_dock.snapshot._capture_inprocess", return_value=None):
+            result = snapshot_at_line(
+                tmp_path / "demo.py",
+                "Demo",
+                10,
+                source=SAMPLE,
+                cache_dir=tmp_path,
+                prefer_inprocess=False,
+            )
+            run.assert_not_called()
     assert result.ok
     assert result.cached
+    assert result.engine == "cache"
     assert result.png_path == str(png.resolve())
     assert result.width == 1
     assert result.height == 1
@@ -235,13 +260,15 @@ def test_snapshot_runs_manim_and_caches(tmp_path: Path):
             "manim_dock.snapshot.resolve_manim_cmd",
             return_value=["manim"],
         ):
-            result = snapshot_at_line(
-                scene_file,
-                "Demo",
-                10,
-                source=SAMPLE,
-                cache_dir=tmp_path / "cache",
-            )
+            with patch("manim_dock.snapshot._capture_inprocess", return_value=None):
+                result = snapshot_at_line(
+                    scene_file,
+                    "Demo",
+                    10,
+                    source=SAMPLE,
+                    cache_dir=tmp_path / "cache",
+                    prefer_inprocess=False,
+                )
         assert run.called
         cmd = run.call_args.args[0]
         assert "-s" in cmd
@@ -249,6 +276,7 @@ def test_snapshot_runs_manim_and_caches(tmp_path: Path):
 
     assert result.ok
     assert not result.cached
+    assert result.engine == "cli"
     assert result.png_path
     cached = Path(result.png_path)
     assert cached.is_file()
@@ -262,6 +290,7 @@ def test_snapshot_runs_manim_and_caches(tmp_path: Path):
             10,
             source=SAMPLE,
             cache_dir=tmp_path / "cache",
+            prefer_inprocess=False,
         )
         run2.assert_not_called()
     assert again.ok and again.cached
@@ -279,13 +308,15 @@ def test_snapshot_timeout(tmp_path: Path):
             "manim_dock.snapshot.resolve_manim_cmd",
             return_value=["manim"],
         ):
-            result = snapshot_at_line(
-                scene_file,
-                "Demo",
-                10,
-                source=SAMPLE,
-                cache_dir=tmp_path / "cache",
-                timeout=1,
-            )
+            with patch("manim_dock.snapshot._capture_inprocess", return_value=None):
+                result = snapshot_at_line(
+                    scene_file,
+                    "Demo",
+                    10,
+                    source=SAMPLE,
+                    cache_dir=tmp_path / "cache",
+                    timeout=1,
+                    prefer_inprocess=False,
+                )
     assert not result.ok
     assert "timed out" in (result.error or "")

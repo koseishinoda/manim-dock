@@ -2,7 +2,7 @@
   "name": "manim-dock",
   "displayName": "Manim Dock",
   "description": "Dock Outline, Stage, and Timeline beside ManimCE Python for educational video production.",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "publisher": "manim-dock",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -63,8 +63,13 @@
       },
       {
         "command": "manimDock.renderScene",
-        "title": "Manim Dock: Render Scene (QL)",
+        "title": "Manim Dock: Render Section (QL)",
         "icon": "$(play)"
+      },
+      {
+        "command": "manimDock.renderFullScene",
+        "title": "Manim Dock: Render Full Scene (QL)",
+        "icon": "$(run-all)"
       },
       {
         "command": "manimDock.renderConcatenated",
@@ -86,7 +91,7 @@
       },
       {
         "command": "manimDock.renderSkipToSection",
-        "title": "Manim Dock: Render from Section (skip prior)",
+        "title": "Manim Dock: Render Section…",
         "icon": "$(debug-step-over)"
       },
       {
@@ -155,6 +160,11 @@
           "group": "navigation"
         },
         {
+          "command": "manimDock.renderFullScene",
+          "when": "view == manimDock.outline",
+          "group": "1_render"
+        },
+        {
           "command": "manimDock.renderWithSections",
           "when": "view == manimDock.outline",
           "group": "1_render"
@@ -213,6 +223,11 @@
           "group": "inline@4"
         },
         {
+          "command": "manimDock.renderFullScene",
+          "when": "view == manimDock.outline && viewItem == manimDock.scene",
+          "group": "1_render"
+        },
+        {
           "command": "manimDock.renderWithSections",
           "when": "view == manimDock.outline && viewItem == manimDock.scene",
           "group": "1_render"
@@ -246,6 +261,11 @@
         },
         {
           "command": "manimDock.insertTemplate",
+          "when": "resourceLangId == python",
+          "group": "1_manimDock"
+        },
+        {
+          "command": "manimDock.renderFullScene",
           "when": "resourceLangId == python",
           "group": "1_manimDock"
         },
@@ -313,6 +333,21 @@
             "Apply immediately via WorkspaceEdit (Undo with Ctrl/Cmd+Z)"
           ],
           "markdownDescription": "How Timeline patches (duration, reorder) are applied to Python source. Also available via command **Manim Dock: Set Patch Mode**."
+        },
+        "manimDock.stage.refresh": {
+          "type": "string",
+          "default": "onIdle",
+          "enum": [
+            "onIdle",
+            "onSave",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "Background-index Timeline beats a few seconds after Stage is idle",
+            "Background-index after save / Stage refresh only",
+            "Do not background-index (interactive still capture only)"
+          ],
+          "markdownDescription": "When Manim Dock builds the Stage **still index** (cached Manim frames at Timeline beats). Interactive scrub always captures on miss; this setting only controls background fill."
         }
       }
     },

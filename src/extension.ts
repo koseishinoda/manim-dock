@@ -61,6 +61,7 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     patchModeStatus,
     outlineTree,
+    { dispose: () => sidecar.dispose() },
     vscode.commands.registerCommand("manimDock.refreshOutline", () => {
       output.appendLine("Refreshing outline…");
       outlineProvider.refresh();
@@ -92,7 +93,20 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "manimDock.renderScene",
       async (item?: unknown) => {
-        await renderSceneCommand(sidecar, outlineProvider, output, item);
+        await renderCurrentSectionCommand(
+          sidecar,
+          outlineProvider,
+          output,
+          item
+        );
+      }
+    ),
+    vscode.commands.registerCommand(
+      "manimDock.renderFullScene",
+      async (item?: unknown) => {
+        await renderSceneCommand(sidecar, outlineProvider, output, item, {
+          titleSuffix: " (full)",
+        });
       }
     ),
     vscode.commands.registerCommand(
@@ -867,6 +881,130 @@ async function fileExists(uri: vscode.Uri): Promise<boolean> {
   }
 }
 
+function listSceneSectionNames(
+  scene: { methods?: Array<{ events: Array<{ kind: string; label: string; range?: SourceRange }> }> } | undefined
+): string[] {
+  const sections: string[] = [];
+  const seen = new Set<string>();
+  for (const method of scene?.methods ?? []) {
+    for (const ev of method.events) {
+      if (ev.kind !== "next_section") {
+        continue;
+      }
+      const name = sectionNameFromOutlineEvent(ev.label);
+      if (!name || seen.has(name)) {
+        continue;
+      }
+      seen.add(name);
+      sections.push(name);
+    }
+  }
+  return sections;
+}
+
+/** Enclosing ``next_section`` name for a 1-based source line, if any. */
+function sectionNameAtLine(
+  scene: {
+    methods?: Array<{
+      events: Array<{ kind: string; label: string; range?: SourceRange }>;
+    }>;
+  } | undefined,
+  line: number
+): string | undefined {
+  if (!scene || line < 1) {
+    return undefined;
+  }
+  let current: string | undefined;
+  const markers: Array<{ line: number; name: string }> = [];
+  for (const method of scene.methods ?? []) {
+    for (const ev of method.events) {
+      if (ev.kind !== "next_section") {
+        continue;
+      }
+      const name = sectionNameFromOutlineEvent(ev.label);
+      const start = ev.range?.start_line ?? 0;
+      if (!name || start < 1) {
+        continue;
+      }
+      markers.push({ line: start, name });
+    }
+  }
+  markers.sort((a, b) => a.line - b.line);
+  for (const m of markers) {
+    if (m.line <= line) {
+      current = m.name;
+    } else {
+      break;
+    }
+  }
+  return current;
+}
+
+async function resolveCurrentSectionName(
+  outlineProvider: OutlineProvider,
+  filePath: string,
+  sceneName: string
+): Promise<{ sections: string[]; section?: string }> {
+  const resolved = await outlineProvider.resolvePythonOutline();
+  if ("error" in resolved) {
+    return { sections: [] };
+  }
+  const scene = resolved.outline.scenes.find((s) => s.name === sceneName);
+  const sections = listSceneSectionNames(scene);
+  if (!sections.length) {
+    return { sections };
+  }
+
+  let line: number | undefined;
+  for (const ed of vscode.window.visibleTextEditors) {
+    if (ed.document.uri.fsPath === filePath) {
+      line = ed.selection.active.line + 1;
+      break;
+    }
+  }
+  if (line == null && vscode.window.activeTextEditor?.document.uri.fsPath === filePath) {
+    line = vscode.window.activeTextEditor.selection.active.line + 1;
+  }
+
+  const fromCaret = line != null ? sectionNameAtLine(scene, line) : undefined;
+  const fromStage = StageTimelinePanel.currentSectionIfOpen(filePath);
+  const section = fromCaret || fromStage || sections[0];
+  return { sections, section };
+}
+
+async function renderCurrentSectionCommand(
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<void> {
+  const target = await resolveSceneTarget(outlineProvider, output, item);
+  if (!target) {
+    return;
+  }
+  const { sections, section } = await resolveCurrentSectionName(
+    outlineProvider,
+    target.filePath,
+    target.sceneName
+  );
+  if (!sections.length || !section) {
+    await renderSceneCommand(sidecar, outlineProvider, output, item, {
+      titleSuffix: " (full — no next_section)",
+    });
+    return;
+  }
+  await renderSceneCommand(
+    sidecar,
+    outlineProvider,
+    output,
+    { filePath: target.filePath, scene: { name: target.sceneName } },
+    {
+      sectionOnly: section,
+      titleSuffix: ` · ${section}`,
+    }
+  );
+}
+
 async function renderSkipToSectionCommand(
   sidecar: SidecarClient,
   outlineProvider: OutlineProvider,
@@ -883,31 +1021,16 @@ async function renderSkipToSectionCommand(
     return;
   }
   const scene = resolved.outline.scenes.find((s) => s.name === target.sceneName);
-  /** Bare Manim section names (not Outline display labels). */
-  const sections: string[] = [];
-  const seen = new Set<string>();
-  for (const method of scene?.methods ?? []) {
-    for (const ev of method.events) {
-      if (ev.kind !== "next_section") {
-        continue;
-      }
-      const name = sectionNameFromOutlineEvent(ev.label);
-      if (!name || seen.has(name)) {
-        continue;
-      }
-      seen.add(name);
-      sections.push(name);
-    }
-  }
+  const sections = listSceneSectionNames(scene);
   if (!sections.length) {
     void vscode.window.showWarningMessage(
       "Manim Dock: no self.next_section(\"…\") markers in this scene. " +
-        "Skip-to-section needs next_section chapters (Skill multi-scene files: render the Scene class instead)."
+        "Section render needs next_section chapters (or use Render Full Scene)."
     );
     return;
   }
   const picked = await vscode.window.showQuickPick(sections, {
-    placeHolder: "Skip animations until this section, then render",
+    placeHolder: "Render only this section (skip before and after)",
   });
   if (!picked) {
     return;
@@ -918,8 +1041,8 @@ async function renderSkipToSectionCommand(
     output,
     { filePath: target.filePath, scene: { name: target.sceneName } },
     {
-      skipUntilSection: picked,
-      titleSuffix: ` (skip → ${picked})`,
+      sectionOnly: picked,
+      titleSuffix: ` · ${picked}`,
     }
   );
 }
@@ -1077,10 +1200,14 @@ async function renderSceneCommand(
 
   const suffix = options?.titleSuffix ?? "";
   const renderOpts: RenderOptions | undefined =
-    options?.saveSections || options?.skipUntilSection || options?.method
+    options?.saveSections ||
+    options?.skipUntilSection ||
+    options?.sectionOnly ||
+    options?.method
       ? {
           saveSections: options.saveSections,
           skipUntilSection: options.skipUntilSection,
+          sectionOnly: options.sectionOnly,
           method: options.method,
         }
       : undefined;
@@ -1089,6 +1216,9 @@ async function renderSceneCommand(
   output.appendLine(
     `\n=== Render ${sceneName}${suffix} (${filePath}) quality=${quality}` +
       (renderOpts?.saveSections ? " save_sections" : "") +
+      (renderOpts?.sectionOnly
+        ? ` section_only=${renderOpts.sectionOnly}`
+        : "") +
       (renderOpts?.skipUntilSection
         ? ` skip_until=${renderOpts.skipUntilSection}`
         : "") +

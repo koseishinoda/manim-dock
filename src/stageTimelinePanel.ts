@@ -3,6 +3,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { revealRange } from "./outlineTree";
 import { ProposedPatchProvider, confirmAndApplyPatch } from "./patchConfirm";
+import { PreviewPanel } from "./previewPanel";
 import {
   SceneTimeline,
   SidecarClient,
@@ -36,6 +37,14 @@ export class StageTimelinePanel {
   private snapshotGeneration = 0;
   private snapshotAvailable: boolean | undefined;
   private snapshotFailNotified = false;
+
+  /** P1 background still index (paused while interactive capture runs). */
+  private indexTimer: ReturnType<typeof setTimeout> | undefined;
+  private indexRunning = false;
+  private indexPaused = false;
+  private indexGeneration = 0;
+  private indexCached = 0;
+  private indexTotal = 0;
 
   private webviewReady = false;
 
@@ -163,6 +172,7 @@ export class StageTimelinePanel {
         this.output.appendLine(`[timeline] ${this.timeline.errors.join("; ")}`);
       }
       await this.scrubAsync(this.lastScrubTime);
+      this.scheduleIndexBuild();
     } catch (err) {
       const text = String(err);
       this.output.appendLine(`[stage-timeline] ${text}`);
@@ -320,6 +330,162 @@ export class StageTimelinePanel {
     return best.start ?? 0;
   }
 
+  private stageRefreshMode(): "onIdle" | "onSave" | "manual" {
+    const mode = vscode.workspace
+      .getConfiguration("manimDock")
+      .get<string>("stage.refresh");
+    if (mode === "onSave" || mode === "manual") {
+      return mode;
+    }
+    return "onIdle";
+  }
+
+  private currentPreferSection(): string | undefined {
+    const events = this.timeline?.events ?? [];
+    const t = this.lastScrubTime;
+    let section = "";
+    for (const ev of events) {
+      if ((ev.start ?? 0) <= t + 1e-9) {
+        if (ev.kind === "next_section") {
+          section = ev.label || section;
+        } else if (ev.section) {
+          section = ev.section;
+        }
+      }
+    }
+    return section || undefined;
+  }
+
+  /** Section label under the Stage scrub for ``filePath``, if this panel is open on it. */
+  static currentSectionIfOpen(filePath: string): string | undefined {
+    const cur = StageTimelinePanel.current;
+    if (!cur?.filePath || cur.filePath !== filePath) {
+      return undefined;
+    }
+    return cur.currentPreferSection();
+  }
+
+  private scheduleIndexBuild(): void {
+    const mode = this.stageRefreshMode();
+    if (mode === "manual") {
+      return;
+    }
+    if (this.indexTimer) {
+      clearTimeout(this.indexTimer);
+    }
+    const delayMs = mode === "onSave" ? 400 : 2000;
+    const gen = ++this.indexGeneration;
+    this.indexTimer = setTimeout(() => {
+      this.indexTimer = undefined;
+      void this.runIndexBuild(gen);
+    }, delayMs);
+  }
+
+  private pauseIndex(): void {
+    this.indexPaused = true;
+    if (this.indexTimer) {
+      clearTimeout(this.indexTimer);
+      this.indexTimer = undefined;
+    }
+    // Abort an in-flight index beat so interactive Stage is not blocked.
+    if (this.indexRunning) {
+      this.indexGeneration += 1;
+      this.sidecar.disposeWorker();
+    }
+  }
+
+  private resumeIndex(): void {
+    this.indexPaused = false;
+    if (this.stageRefreshMode() !== "manual") {
+      this.scheduleIndexBuild();
+    }
+  }
+
+  private postIndexStatus(): void {
+    const label =
+      this.indexTotal > 0
+        ? `Indexed ${this.indexCached}/${this.indexTotal}`
+        : "Index…";
+    void this.panel.webview.postMessage({
+      type: "indexStatus",
+      cached: this.indexCached,
+      total: this.indexTotal,
+      complete: this.indexTotal > 0 && this.indexCached >= this.indexTotal,
+      label,
+    });
+  }
+
+  private async runIndexBuild(generation: number): Promise<void> {
+    if (this.indexRunning || this.indexPaused) {
+      return;
+    }
+    if (!this.filePath || !this.sceneName) {
+      return;
+    }
+    if (generation !== this.indexGeneration) {
+      return;
+    }
+    const mode = this.stageRefreshMode();
+    if (mode === "manual") {
+      return;
+    }
+    this.indexRunning = true;
+    const cacheDir = snapshotCacheDir(this.context);
+    try {
+      const doc = await vscode.workspace.openTextDocument(this.filePath);
+      const source = doc.getText();
+      // Cap interactive waits: one beat per RPC so scrub can pause between beats.
+      for (;;) {
+        if (this.indexPaused || generation !== this.indexGeneration) {
+          break;
+        }
+        if (!this.filePath || !this.sceneName) {
+          break;
+        }
+        const prefer = this.currentPreferSection();
+        const result = await this.sidecar.stillIndex(
+          this.filePath,
+          this.sceneName,
+          source,
+          cacheDir,
+          {
+            quality: "l",
+            maxBeats: 1,
+            preferSection: prefer,
+            timeoutSec: 180,
+          }
+        );
+        if (generation !== this.indexGeneration) {
+          break;
+        }
+        this.indexCached = result.cached;
+        this.indexTotal = result.total;
+        this.postIndexStatus();
+        if (!result.ok) {
+          this.output.appendLine(
+            `[still-index] FAIL ${result.error || "unknown"}`
+          );
+          break;
+        }
+        if (result.built > 0) {
+          this.output.appendLine(
+            `[still-index] built=${result.built} ${result.cached}/${result.total}` +
+              (result.section ? ` section=${result.section}` : "")
+          );
+        }
+        if (result.complete || result.built === 0) {
+          break;
+        }
+        // Yield to the event loop so debounced snapshots can pause us.
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    } catch (err) {
+      this.output.appendLine(`[still-index] ${String(err)}`);
+    } finally {
+      this.indexRunning = false;
+    }
+  }
+
   private scheduleSnapshot(activeUntilLine: number): void {
     if (this.snapshotAvailable === false) {
       void this.panel.webview.postMessage({
@@ -331,6 +497,7 @@ export class StageTimelinePanel {
       });
       return;
     }
+    this.pauseIndex();
     if (this.snapshotTimer) {
       clearTimeout(this.snapshotTimer);
     }
@@ -374,22 +541,28 @@ export class StageTimelinePanel {
     try {
       const doc = await vscode.workspace.openTextDocument(this.filePath);
       this.output.appendLine(
-        `[stage-snapshot] capturing line=${activeUntilLine} scene=${this.sceneName} cache=${cacheDir}`
+        `[stage-snapshot] get line=${activeUntilLine} scene=${this.sceneName} cache=${cacheDir}`
       );
-      const result = await this.sidecar.snapshotAtLine(
+      const result = await this.sidecar.stillGet(
         this.filePath,
         this.sceneName,
         activeUntilLine,
         doc.getText(),
+        cacheDir,
         "l",
-        90,
-        cacheDir
+        120,
+        true
       );
       if (generation !== this.snapshotGeneration) {
         this.output.appendLine(
           `[stage-snapshot] drop late result gen=${generation}`
         );
         return;
+      }
+      if (result.index_total > 0) {
+        this.indexCached = result.index_cached;
+        this.indexTotal = result.index_total;
+        this.postIndexStatus();
       }
       if (!result.ok || !result.png_path) {
         const err = result.error || "snapshot returned no PNG";
@@ -405,9 +578,6 @@ export class StageTimelinePanel {
           error: err,
         });
         this.notifySnapshotFail(err);
-        if (result.log_tail) {
-          this.output.appendLine(result.log_tail.slice(-1200));
-        }
         return;
       }
       this.snapshotAvailable = true;
@@ -427,7 +597,7 @@ export class StageTimelinePanel {
         cached: result.cached,
       });
       this.output.appendLine(
-        `[stage-snapshot] OK cached=${result.cached} ${result.png_path}`
+        `[stage-snapshot] OK cached=${result.cached} engine=${result.engine || "?"} ${result.png_path}`
       );
     } catch (err) {
       if (generation !== this.snapshotGeneration) {
@@ -448,6 +618,10 @@ export class StageTimelinePanel {
         error: message,
       });
       this.notifySnapshotFail(message);
+    } finally {
+      if (generation === this.snapshotGeneration) {
+        this.resumeIndex();
+      }
     }
   }
 
@@ -511,6 +685,69 @@ export class StageTimelinePanel {
       await this.handleResize(rec);
       return;
     }
+
+    if (type === "renderSection") {
+      const section = String(rec.section ?? "").trim();
+      if (!section) {
+        return;
+      }
+      await this.renderSection(section);
+      return;
+    }
+  }
+
+  private async renderSection(section: string): Promise<void> {
+    if (!this.filePath || !this.sceneName) {
+      return;
+    }
+    const quality =
+      vscode.workspace.getConfiguration("manimDock").get<string>("renderQuality") ||
+      "l";
+    const sceneName = this.sceneName;
+    const filePath = this.filePath;
+    this.output.show(true);
+    this.output.appendLine(
+      `\n=== Render ${sceneName} · ${section} (${filePath}) quality=${quality} section_only ===`
+    );
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Manim Dock: rendering ${section}…`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          const result = await this.sidecar.render(
+            filePath,
+            sceneName,
+            quality,
+            (chunk) => {
+              this.output.append(chunk);
+            },
+            { sectionOnly: section }
+          );
+          if (result.log_tail) {
+            this.output.appendLine("\n--- log tail ---");
+            this.output.appendLine(result.log_tail);
+          }
+          if (!result.ok || !result.output_path) {
+            void vscode.window.showErrorMessage(
+              `Manim Dock render failed: ${result.error ?? "unknown error"}. See “Manim Dock” output.`
+            );
+            return;
+          }
+          PreviewPanel.show(result.output_path, `${sceneName} · ${section}`);
+          void vscode.window.showInformationMessage(
+            `Manim Dock: rendered ${section}`
+          );
+        } catch (err) {
+          this.output.appendLine(String(err));
+          void vscode.window.showErrorMessage(
+            `Manim Dock render failed: ${String(err)}. Check the Manim Dock output and your Python/Manim install.`
+          );
+        }
+      }
+    );
   }
 
   private async handleReorder(rec: Record<string, unknown>): Promise<void> {
@@ -748,6 +985,12 @@ export class StageTimelinePanel {
     .handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
     .dur { text-align: right; opacity: 0.85; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .section-row .label { font-weight: 600; color: #ddd; }
+    .section-render-btn {
+      appearance: none; margin: 0; padding: 2px 8px; font-size: 11px; line-height: 1.2;
+      color: #c8c8c8; background: #2a2b30; border: 1px solid #555; border-radius: 3px;
+      cursor: pointer;
+    }
+    .section-render-btn:hover { color: #fff; border-color: #7eb6ff; background: #2d4a6f; }
     .row.active { outline: 1px solid #ffe08a; outline-offset: 2px; border-radius: 2px; }
     .row.active .label { color: #ffe08a; }
   </style>
@@ -781,9 +1024,15 @@ export class StageTimelinePanel {
     this.lastScrubTime = 0;
     this.snapshotAvailable = undefined;
     this.snapshotGeneration += 1;
+    this.indexGeneration += 1;
+    this.indexPaused = true;
     if (this.snapshotTimer) {
       clearTimeout(this.snapshotTimer);
       this.snapshotTimer = undefined;
+    }
+    if (this.indexTimer) {
+      clearTimeout(this.indexTimer);
+      this.indexTimer = undefined;
     }
     while (this.disposables.length) {
       this.disposables.pop()?.dispose();

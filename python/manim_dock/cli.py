@@ -111,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip animations before this next_section name (temp copy; user file untouched)",
     )
     render_p.add_argument(
+        "--section-only",
+        default=None,
+        metavar="NAME",
+        help="Render only this next_section chapter (skip before and after; temp copy)",
+    )
+    render_p.add_argument(
         "--method",
         default=None,
         metavar="NAME",
@@ -216,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             quality=args.quality,
             save_sections=bool(args.save_sections),
             skip_until_section=args.skip_until_section,
+            section_only=args.section_only,
             method=args.method,
         )
         json.dump(result.to_dict(), sys.stdout, indent=2)

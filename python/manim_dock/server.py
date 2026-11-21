@@ -22,6 +22,7 @@ from manim_dock.patch_timing import (
 )
 from manim_dock.render import render_scene
 from manim_dock.snapshot import snapshot_at_line
+from manim_dock.still_index import still_get, still_index, still_index_status
 from manim_dock.timeline import parse_file_timeline
 
 
@@ -139,6 +140,8 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         quality = params.get("quality") or "l"
         timeout = params.get("timeout")
         source = params.get("source")
+        cache_dir = params.get("cache_dir")
+        prefer = params.get("prefer_inprocess")
         return snapshot_at_line(
             path,
             str(scene),
@@ -146,6 +149,8 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
             source=source if isinstance(source, str) else None,
             quality=str(quality),
             timeout=int(timeout) if timeout is not None else None,
+            cache_dir=str(cache_dir) if cache_dir else None,
+            prefer_inprocess=True if prefer is None else bool(prefer),
         ).to_dict()
     if method == "render":
         path = params.get("path")
@@ -156,6 +161,8 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         save_sections = bool(params.get("save_sections") or False)
         skip_until = params.get("skip_until_section")
         skip_until_section = str(skip_until) if skip_until else None
+        only = params.get("section_only")
+        section_only = str(only) if only else None
         method_name = params.get("method")
         render_method = str(method_name) if method_name else None
         return render_scene(
@@ -164,6 +171,7 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
             quality=str(quality),
             save_sections=save_sections,
             skip_until_section=skip_until_section,
+            section_only=section_only,
             method=render_method,
         ).to_dict()
     if method == "library_catalog":
@@ -172,6 +180,69 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
             raise ValueError("params.path (library .py) is required")
         helpers = list_library_helpers(str(library_path))
         return {"ok": True, "helpers": helpers}
+    if method == "still_get":
+        path = params.get("path")
+        scene = params.get("scene")
+        line = params.get("line")
+        if not path or not scene or line is None:
+            raise ValueError("params.path, params.scene, and params.line are required")
+        cache_dir = params.get("cache_dir")
+        if not cache_dir:
+            raise ValueError("params.cache_dir is required")
+        quality = params.get("quality") or "l"
+        source = params.get("source")
+        timeout = params.get("timeout")
+        capture = params.get("capture_on_miss")
+        return still_get(
+            path,
+            str(scene),
+            int(line),
+            source=source if isinstance(source, str) else None,
+            quality=str(quality),
+            cache_dir=str(cache_dir),
+            capture_on_miss=True if capture is None else bool(capture),
+            timeout=int(timeout) if timeout is not None else None,
+        ).to_dict()
+    if method == "still_index":
+        path = params.get("path")
+        scene = params.get("scene")
+        if not path or not scene:
+            raise ValueError("params.path and params.scene are required")
+        cache_dir = params.get("cache_dir")
+        if not cache_dir:
+            raise ValueError("params.cache_dir is required")
+        quality = params.get("quality") or "l"
+        source = params.get("source")
+        timeout = params.get("timeout")
+        max_beats = int(params.get("max_beats") or 1)
+        prefer = params.get("prefer_section")
+        return still_index(
+            path,
+            str(scene),
+            source=source if isinstance(source, str) else None,
+            quality=str(quality),
+            cache_dir=str(cache_dir),
+            max_beats=max_beats,
+            prefer_section=str(prefer) if prefer else None,
+            timeout=int(timeout) if timeout is not None else None,
+        ).to_dict()
+    if method == "still_index_status":
+        path = params.get("path")
+        scene = params.get("scene")
+        if not path or not scene:
+            raise ValueError("params.path and params.scene are required")
+        cache_dir = params.get("cache_dir")
+        if not cache_dir:
+            raise ValueError("params.cache_dir is required")
+        quality = params.get("quality") or "l"
+        source = params.get("source")
+        return still_index_status(
+            path,
+            str(scene),
+            source=source if isinstance(source, str) else None,
+            quality=str(quality),
+            cache_dir=str(cache_dir),
+        ).to_dict()
     raise ValueError(f"unknown method: {method}")
 
 

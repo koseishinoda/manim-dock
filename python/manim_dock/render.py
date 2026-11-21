@@ -268,6 +268,87 @@ def _iter_section_names(module: cst.Module) -> list[str]:
     return names
 
 
+def _stmt_next_section_call(stmt: cst.BaseStatement) -> cst.Call | None:
+    """Return ``self.next_section(...)`` if ``stmt`` is a simple expression call."""
+    if not isinstance(stmt, cst.SimpleStatementLine):
+        return None
+    if len(stmt.body) != 1:
+        return None
+    expr = stmt.body[0]
+    if not isinstance(expr, cst.Expr) or not isinstance(expr.value, cst.Call):
+        return None
+    if not _is_self_next_section(expr.value):
+        return None
+    return expr.value
+
+
+def _ensure_early_exit_import_module(module: cst.Module) -> cst.Module:
+    """Insert ``EndSceneEarlyException`` import after ``__future__`` if missing."""
+    if "from manim.utils.exceptions import EndSceneEarlyException" in module.code:
+        return module
+    import_stmt = cst.parse_statement(
+        "from manim.utils.exceptions import EndSceneEarlyException\n"
+    )
+    body = list(module.body)
+    insert_at = 0
+    for i, stmt in enumerate(body):
+        if isinstance(stmt, cst.SimpleStatementLine):
+            for small in stmt.body:
+                if isinstance(small, cst.ImportFrom) and isinstance(
+                    small.module, cst.Name
+                ):
+                    if small.module.value == "__future__":
+                        insert_at = i + 1
+        elif isinstance(stmt, cst.ImportFrom) and isinstance(
+            stmt.module, cst.Name
+        ):
+            if stmt.module.value == "__future__":
+                insert_at = i + 1
+    body.insert(insert_at, import_stmt)
+    return module.with_changes(body=body)
+
+
+class _InsertEarlyExitAfterSection(cst.CSTTransformer):
+    """Truncate ``construct`` at the next ``next_section`` after ``section_name``."""
+
+    def __init__(self, section_name: str) -> None:
+        self.section_name = section_name
+        self.inserted = False
+
+    def leave_FunctionDef(
+        self, original_node: cst.FunctionDef, updated_node: cst.FunctionDef
+    ) -> cst.FunctionDef:
+        if updated_node.name.value != "construct":
+            return updated_node
+        block = updated_node.body
+        if not isinstance(block, cst.IndentedBlock):
+            return updated_node
+
+        new_stmts: list[cst.BaseStatement] = []
+        seen_target = False
+        for stmt in block.body:
+            call = _stmt_next_section_call(stmt)
+            if call is not None:
+                name = _section_name_from_call(call)
+                if name == self.section_name:
+                    seen_target = True
+                    new_stmts.append(stmt)
+                    continue
+                if seen_target:
+                    new_stmts.append(
+                        cst.parse_statement("raise EndSceneEarlyException()\n")
+                    )
+                    self.inserted = True
+                    break
+            new_stmts.append(stmt)
+
+        if not self.inserted:
+            return updated_node
+        return updated_node.with_changes(
+            body=block.with_changes(body=new_stmts)
+        )
+
+
 def _apply_skip_until_section(source: str, section_name: str) -> str:
     """Return source with ``skip_animations=True`` on sections before ``section_name``.
 
@@ -282,6 +363,26 @@ def _apply_skip_until_section(source: str, section_name: str) -> str:
         raise ValueError(f"section not found: {section_name!r}")
     transformer = _SkipUntilSectionTransformer(section_name)
     updated = module.visit(transformer)
+    return updated.code
+
+
+def _apply_section_only(source: str, section_name: str) -> str:
+    """Render only ``section_name``: skip prior, early-exit before the next section.
+
+    Stops ``construct`` with ``EndSceneEarlyException`` so later chapters do not
+    build mobjects. Raises ``ValueError`` if the target section name is not found.
+    """
+    if not section_name:
+        raise ValueError("section_name must be non-empty")
+    module = cst.parse_module(source)
+    if section_name not in _iter_section_names(module):
+        raise ValueError(f"section not found: {section_name!r}")
+    # Skip animations before the target (later code is cut by early exit).
+    updated = module.visit(_SkipUntilSectionTransformer(section_name))
+    early = _InsertEarlyExitAfterSection(section_name)
+    updated = updated.visit(early)
+    if early.inserted:
+        updated = _ensure_early_exit_import_module(updated)
     return updated.code
 
 
@@ -379,6 +480,7 @@ def render_scene(
     timeout: int | None = 600,
     save_sections: bool = False,
     skip_until_section: str | None = None,
+    section_only: str | None = None,
     method: str | None = None,
 ) -> RenderResult:
     path = Path(file_path).resolve()
@@ -389,7 +491,7 @@ def render_scene(
     render_path = path
     temp_path: Path | None = None
 
-    if method or skip_until_section:
+    if method or skip_until_section or section_only:
         try:
             source = path.read_text(encoding="utf-8")
             transformed = source
@@ -397,20 +499,35 @@ def render_scene(
                 transformed = _construct_only_method(
                     transformed, scene_name, method
                 )
-            if skip_until_section:
+            # section_only wins over skip_until when both are set.
+            if section_only:
+                transformed = _apply_section_only(transformed, section_only)
+            elif skip_until_section:
                 transformed = _apply_skip_until_section(
                     transformed, skip_until_section
                 )
         except ValueError as exc:
             return RenderResult(ok=False, error=str(exc), cwd=str(cwd))
         except Exception as exc:  # noqa: BLE001 — surface parse failures
-            kind = "method" if method else "skip_until_section"
+            kind = (
+                "method"
+                if method
+                else "section_only"
+                if section_only
+                else "skip_until_section"
+            )
             return RenderResult(
                 ok=False,
                 error=f"{kind} transform failed: {exc}",
                 cwd=str(cwd),
             )
-        tag = "method" if method else "skip"
+        tag = (
+            "method"
+            if method
+            else "sect"
+            if section_only
+            else "skip"
+        )
         try:
             temp_path = _write_temp_render_source(
                 cwd, path, transformed, prefix_tag=tag

@@ -1,6 +1,16 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.10`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.11`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.11
+
+Stage speed + section-scoped render:
+
+- **Stage still index:** prefix-digest PNG cache, warm `manim_dock serve` worker, in-process last-frame capture, background beat ladder (`manimDock.stage.refresh`)
+- **Render Section (QL)** as primary play (current `next_section`); **Render Full Scene** explicit; Timeline section **▶** button
+- Section-only transform skips prior chapters and **early-exits** before the next section
+- Warm-worker render; still-index pauses/aborts on scrub; orphan still prune when index completes
+- Design note: [docs/stage-still-index.md](docs/stage-still-index.md)
 
 ## 0.2.10
 

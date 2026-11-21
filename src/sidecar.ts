@@ -76,6 +76,59 @@ export interface SnapshotResult {
   returncode: number | null;
   log_tail: string;
   error: string | null;
+  /** ``cache`` | ``inprocess`` | ``cli`` when provided by the sidecar. */
+  engine?: string;
+}
+
+export interface StillGetResult {
+  ok: boolean;
+  path: string;
+  scene: string;
+  line: number;
+  beat?: {
+    ordinal: number;
+    kind: string;
+    label: string;
+    source_line: number;
+    section: string;
+    cache_key: string;
+  } | null;
+  png_path: string | null;
+  width: number | null;
+  height: number | null;
+  cached: boolean;
+  captured: boolean;
+  engine: string;
+  error: string | null;
+  index_cached: number;
+  index_total: number;
+}
+
+export interface StillIndexResult {
+  ok: boolean;
+  path: string;
+  scene: string;
+  built: number;
+  skipped: number;
+  cached: number;
+  total: number;
+  complete: boolean;
+  next_ordinal: number | null;
+  section: string;
+  error: string | null;
+  last_engine: string;
+}
+
+export interface StillIndexStatus {
+  ok: boolean;
+  path: string;
+  scene: string;
+  cached: number;
+  total: number;
+  complete: boolean;
+  next_ordinal: number | null;
+  section: string;
+  error: string | null;
 }
 
 
@@ -132,6 +185,8 @@ export interface ReorderPatchProposal {
 export interface RenderOptions {
   saveSections?: boolean;
   skipUntilSection?: string;
+  /** Render only this next_section chapter (skip before and after). */
+  sectionOnly?: string;
   /** When set, rewrite construct to only call this method before render. */
   method?: string;
 }
@@ -470,6 +525,10 @@ function renderInlineCode(
     opts?.skipUntilSection !== undefined && opts.skipUntilSection !== ""
       ? JSON.stringify(opts.skipUntilSection)
       : "None";
+  const sectionOnly =
+    opts?.sectionOnly !== undefined && opts.sectionOnly !== ""
+      ? JSON.stringify(opts.sectionOnly)
+      : "None";
   const method =
     opts?.method !== undefined && opts.method !== ""
       ? JSON.stringify(opts.method)
@@ -484,6 +543,7 @@ print(json.dumps(render_scene(
     quality=${JSON.stringify(quality)},
     save_sections=${saveSections ? "True" : "False"},
     skip_until_section=${skipUntil},
+    section_only=${sectionOnly},
     method=${method},
 ).to_dict()))
 `.trim();
@@ -614,7 +674,189 @@ print(json.dumps(propose_extract_method(
 `.trim();
 }
 
+/**
+ * Long-lived ``python -m manim_dock serve`` session (warm imports for Stage).
+ * Falls back to one-shot ``python -c`` when the worker is unavailable.
+ */
+class PersistentSidecarSession {
+  private child: ReturnType<typeof spawn> | undefined;
+  private stdoutBuf = "";
+  private nextId = 1;
+  private readonly pending = new Map<
+    number,
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private starting: Promise<void> | undefined;
+  private pythonPath = "";
+  private pythonRoot = "";
+
+  async ensure(pythonPath: string, pythonRoot: string): Promise<void> {
+    if (
+      this.child &&
+      !this.child.killed &&
+      this.pythonPath === pythonPath &&
+      this.pythonRoot === pythonRoot
+    ) {
+      return;
+    }
+    this.dispose();
+    this.pythonPath = pythonPath;
+    this.pythonRoot = pythonRoot;
+    if (!this.starting) {
+      this.starting = this.spawnWorker().finally(() => {
+        this.starting = undefined;
+      });
+    }
+    await this.starting;
+  }
+
+  private spawnWorker(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const priorPyPath = process.env.PYTHONPATH || "";
+      const mergedPyPath = priorPyPath
+        ? `${this.pythonRoot}${path.delimiter}${priorPyPath}`
+        : this.pythonRoot;
+      const child = spawn(
+        this.pythonPath,
+        ["-m", "manim_dock", "serve"],
+        {
+          env: sidecarChildEnv({
+            PYTHONPATH: mergedPyPath,
+            PYTHONUNBUFFERED: "1",
+          }),
+          stdio: ["pipe", "pipe", "pipe"],
+        }
+      );
+      this.child = child;
+      let settled = false;
+
+      const fail = (err: Error): void => {
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
+        this.failAll(err);
+        this.child = undefined;
+      };
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        this.stdoutBuf += chunk.toString();
+        this.drainStdout();
+      });
+      child.stderr?.on("data", (_chunk: Buffer) => {
+        // Worker progress / Manim noise — ignore for RPC framing.
+      });
+      child.on("error", (err) => {
+        fail(err instanceof Error ? err : new Error(String(err)));
+      });
+      child.on("close", (code) => {
+        fail(new Error(`manim_dock serve exited (${code ?? "?"})`));
+      });
+
+      // Ready when ping round-trips.
+      void this.rawRequest("ping", {}, 8_000)
+        .then(() => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        })
+        .catch((err) => fail(err instanceof Error ? err : new Error(String(err))));
+    });
+  }
+
+  private drainStdout(): void {
+    let idx: number;
+    while ((idx = this.stdoutBuf.indexOf("\n")) >= 0) {
+      const line = this.stdoutBuf.slice(0, idx).trim();
+      this.stdoutBuf = this.stdoutBuf.slice(idx + 1);
+      if (!line) {
+        continue;
+      }
+      let msg: {
+        id?: number;
+        result?: unknown;
+        error?: { message?: string };
+      };
+      try {
+        msg = JSON.parse(line) as typeof msg;
+      } catch {
+        continue;
+      }
+      if (typeof msg.id !== "number") {
+        continue;
+      }
+      const pending = this.pending.get(msg.id);
+      if (!pending) {
+        continue;
+      }
+      clearTimeout(pending.timer);
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        pending.reject(new Error(msg.error.message || "sidecar error"));
+      } else {
+        pending.resolve(msg.result);
+      }
+    }
+  }
+
+  private failAll(err: Error): void {
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
+    this.pending.clear();
+  }
+
+  private rawRequest(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number
+  ): Promise<unknown> {
+    const child = this.child;
+    if (!child?.stdin) {
+      return Promise.reject(new Error("sidecar worker not running"));
+    }
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`sidecar RPC timed out after ${timeoutMs}ms (${method})`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      child.stdin!.write(
+        `${JSON.stringify({ id, method, params })}\n`,
+        "utf8"
+      );
+    });
+  }
+
+  async request<T>(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number
+  ): Promise<T> {
+    return (await this.rawRequest(method, params, timeoutMs)) as T;
+  }
+
+  dispose(): void {
+    this.failAll(new Error("sidecar worker disposed"));
+    if (this.child) {
+      this.child.removeAllListeners();
+      this.child.kill("SIGTERM");
+      this.child = undefined;
+    }
+    this.stdoutBuf = "";
+  }
+}
+
 export class SidecarClient {
+  private readonly worker = new PersistentSidecarSession();
+
   constructor(private readonly extensionPath: string) {}
 
   getExtensionPath(): string {
@@ -623,6 +865,118 @@ export class SidecarClient {
 
   getRoots(): string[] {
     return sidecarRoots(this.extensionPath);
+  }
+
+  dispose(): void {
+    this.worker.dispose();
+  }
+
+  /** Kill the warm worker (e.g. abort a blocking still-index beat). */
+  disposeWorker(): void {
+    this.worker.dispose();
+  }
+
+  /** Warm-worker JSON-RPC with one-shot fallback for long Stage work. */
+  private async callWorker<T>(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number
+  ): Promise<T> {
+    const roots = this.getRoots();
+    if (!roots.length) {
+      throw new Error(`python/manim_dock not found under ${this.extensionPath}`);
+    }
+    const bins = await resolvePythonBins(this.extensionPath);
+    const errors: string[] = [];
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          await this.worker.ensure(bin, root);
+          return await this.worker.request<T>(method, params, timeoutMs);
+        } catch (err) {
+          errors.push(`[warm ${bin}] ${String(err)}`);
+          this.worker.dispose();
+        }
+      }
+    }
+    throw new Error(`${method} failed:\n${errors.join("\n")}`);
+  }
+
+  async stillGet(
+    filePath: string,
+    sceneName: string,
+    line: number,
+    source: string | undefined,
+    cacheDir: string,
+    quality: string = "l",
+    timeoutSec: number = 90,
+    captureOnMiss: boolean = true
+  ): Promise<StillGetResult> {
+    const hostTimeoutMs = Math.max(15_000, (timeoutSec + 15) * 1000);
+    return this.callWorker<StillGetResult>(
+      "still_get",
+      {
+        path: filePath,
+        scene: sceneName,
+        line,
+        source: source ?? null,
+        quality,
+        timeout: timeoutSec,
+        cache_dir: cacheDir,
+        capture_on_miss: captureOnMiss,
+      },
+      hostTimeoutMs
+    );
+  }
+
+  async stillIndex(
+    filePath: string,
+    sceneName: string,
+    source: string | undefined,
+    cacheDir: string,
+    opts?: {
+      quality?: string;
+      maxBeats?: number;
+      preferSection?: string;
+      timeoutSec?: number;
+    }
+  ): Promise<StillIndexResult> {
+    const timeoutSec = opts?.timeoutSec ?? 180;
+    const hostTimeoutMs = Math.max(30_000, (timeoutSec + 30) * 1000);
+    return this.callWorker<StillIndexResult>(
+      "still_index",
+      {
+        path: filePath,
+        scene: sceneName,
+        source: source ?? null,
+        quality: opts?.quality ?? "l",
+        cache_dir: cacheDir,
+        max_beats: opts?.maxBeats ?? 1,
+        prefer_section: opts?.preferSection ?? null,
+        timeout: timeoutSec,
+      },
+      hostTimeoutMs
+    );
+  }
+
+  async stillIndexStatus(
+    filePath: string,
+    sceneName: string,
+    source: string | undefined,
+    cacheDir: string,
+    quality: string = "l"
+  ): Promise<StillIndexStatus> {
+    return this.callWorker<StillIndexStatus>(
+      "still_index_status",
+      {
+        path: filePath,
+        scene: sceneName,
+        source: source ?? null,
+        quality,
+        cache_dir: cacheDir,
+      },
+      30_000
+    );
   }
 
   async outline(filePath: string): Promise<FileOutline> {
@@ -668,6 +1022,34 @@ export class SidecarClient {
     const errors: string[] = [];
     // Host timeout slightly above Manim timeout so Python can return a structured error.
     const hostTimeoutMs = Math.max(15_000, (timeoutSec + 15) * 1000);
+    const params = {
+      path: filePath,
+      scene: sceneName,
+      active_until_line: activeUntilLine,
+      source: source ?? null,
+      quality,
+      timeout: timeoutSec,
+      cache_dir: cacheDir ?? null,
+    };
+
+    // Prefer warm persistent worker (keeps Manim + project imports loaded).
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          await this.worker.ensure(bin, root);
+          return await this.worker.request<SnapshotResult>(
+            "snapshot",
+            params,
+            hostTimeoutMs
+          );
+        } catch (err) {
+          errors.push(`[warm ${bin}] ${String(err)}`);
+          this.worker.dispose();
+        }
+      }
+    }
+
+    // Fallback: one-shot python -c (cold imports).
     for (const root of roots) {
       for (const bin of bins) {
         try {
@@ -907,6 +1289,39 @@ export class SidecarClient {
     }
     const bins = await resolvePythonBins(this.extensionPath);
     const errors: string[] = [];
+    const timeoutMs = 15 * 60 * 1000;
+    const params: Record<string, unknown> = {
+      path: filePath,
+      scene: sceneName,
+      quality,
+      save_sections: opts?.saveSections === true,
+      skip_until_section: opts?.skipUntilSection || null,
+      section_only: opts?.sectionOnly || null,
+      method: opts?.method || null,
+    };
+
+    // Prefer warm worker (shared Manim import with Stage).
+    for (const root of roots) {
+      for (const bin of bins) {
+        try {
+          await this.worker.ensure(bin, root);
+          onLog?.(
+            `[manim-dock] warm render ${sceneName}` +
+              (opts?.sectionOnly ? ` section_only=${opts.sectionOnly}` : "") +
+              "\n"
+          );
+          return await this.worker.request<RenderResult>(
+            "render",
+            params,
+            timeoutMs
+          );
+        } catch (err) {
+          errors.push(`[warm ${bin}] ${String(err)}`);
+          this.worker.dispose();
+        }
+      }
+    }
+
     for (const root of roots) {
       for (const bin of bins) {
         try {
@@ -917,7 +1332,7 @@ export class SidecarClient {
               renderInlineCode(root, filePath, sceneName, quality, opts),
             ],
             {
-              timeoutMs: 15 * 60 * 1000,
+              timeoutMs,
               onLog,
             }
           );

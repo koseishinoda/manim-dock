@@ -59,3 +59,17 @@ class Demo(Scene):
 def test_apply_skip_until_section_missing_raises() -> None:
     with pytest.raises(ValueError, match="section not found"):
         _apply_skip_until_section(SOURCE, "Missing")
+
+
+def test_apply_section_only_skips_prior_and_early_exits() -> None:
+    from manim_dock.render import _apply_section_only
+
+    out = _apply_section_only(SOURCE, "Body")
+    assert 'self.next_section("Title", skip_animations=True)' in out
+    assert 'self.next_section(name="Body"' in out
+    assert "skip_animations" not in out.split('name="Body"')[1].split("\n")[0]
+    assert "raise EndSceneEarlyException()" in out
+    assert "from manim.utils.exceptions import EndSceneEarlyException" in out
+    # Later section body is truncated away.
+    assert "Cleanup" not in out
+    assert "FadeOut" not in out

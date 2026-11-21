@@ -47,6 +47,8 @@ let scrubUntilLine = null;
 let stillUri = null;
 let snapshotPending = false;
 let snapshotError = null;
+/** @type {string | null} */
+let indexLabel = null;
 let scrubEl = null;
 let scrubLabel = null;
 let reorderArmed = false;
@@ -113,6 +115,9 @@ function updateChromeTitle() {
     text += ' · Manim still';
   } else if (snapshotError) {
     text += ' · Still failed';
+  }
+  if (indexLabel) {
+    text += ' · ' + indexLabel;
   }
   titleEl.textContent = text;
 }
@@ -502,6 +507,22 @@ function rebuildTimeline() {
     dur.className = 'dur';
     if (ev.kind === 'next_section') {
       dur.textContent = '';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'section-render-btn';
+      btn.title = 'Render this section (QL)';
+      btn.setAttribute('aria-label', 'Render section');
+      btn.textContent = '▶';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const name = eventSection(ev) || String(ev.label || '');
+        if (!name) {
+          return;
+        }
+        vscode.postMessage({ type: 'renderSection', section: name });
+      });
+      dur.appendChild(btn);
     } else if (ev.kind === 'add') {
       dur.textContent = '—';
       dur.title = ev.note || 'static add — Stage scrub only';
@@ -719,6 +740,9 @@ window.addEventListener('message', (event) => {
     snapshotPending = false;
     snapshotError = msg.error ? String(msg.error) : 'still failed';
     syncStageVisual();
+  } else if (msg.type === 'indexStatus') {
+    indexLabel = msg.label ? String(msg.label) : null;
+    updateChromeTitle();
   }
 });
 ensureStageDom();
