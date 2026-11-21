@@ -936,7 +936,7 @@ export class StageTimelinePanel {
     #rows .placeholder { color: #8a8a8a; font-size: 12px; padding: 12px 0; }
     .scrub-row, .row {
       display: grid;
-      grid-template-columns: minmax(96px, 160px) minmax(0, 1fr) 56px;
+      grid-template-columns: minmax(96px, 160px) minmax(0, 1fr) 72px;
       gap: 8px;
       align-items: center;
       font-size: 12px;
@@ -986,11 +986,11 @@ export class StageTimelinePanel {
     .dur { text-align: right; opacity: 0.85; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .section-row .label { font-weight: 600; color: #ddd; }
     .section-render-btn {
-      appearance: none; margin: 0; padding: 2px 8px; font-size: 11px; line-height: 1.2;
-      color: #c8c8c8; background: #2a2b30; border: 1px solid #555; border-radius: 3px;
-      cursor: pointer;
+      appearance: none; margin: 0; padding: 3px 8px; font-size: 11px; line-height: 1.2;
+      font-weight: 600; color: #e8f0ff; background: #2d4a6f; border: 1px solid #7eb6ff;
+      border-radius: 3px; cursor: pointer; width: 100%; box-sizing: border-box;
     }
-    .section-render-btn:hover { color: #fff; border-color: #7eb6ff; background: #2d4a6f; }
+    .section-render-btn:hover { color: #fff; border-color: #a8d0ff; background: #3a5f8f; }
     .row.active { outline: 1px solid #ffe08a; outline-offset: 2px; border-radius: 2px; }
     .row.active .label { color: #ffe08a; }
   </style>

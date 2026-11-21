@@ -511,8 +511,8 @@ function rebuildTimeline() {
       btn.type = 'button';
       btn.className = 'section-render-btn';
       btn.title = 'Render this section (QL)';
-      btn.setAttribute('aria-label', 'Render section');
-      btn.textContent = '▶';
+      btn.setAttribute('aria-label', 'Render section QL');
+      btn.textContent = '▶ QL';
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();

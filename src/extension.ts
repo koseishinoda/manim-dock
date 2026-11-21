@@ -5,6 +5,7 @@ import { runFfmpegConcat, writeConcatFile } from "./concatRender";
 import {
   asMethodTarget,
   asSceneTarget,
+  asSectionTarget,
   OutlineProvider,
   SceneNode,
   revealRange,
@@ -142,6 +143,17 @@ export function activate(context: vscode.ExtensionContext): void {
           saveSections: true,
           titleSuffix: " (sections)",
         });
+      }
+    ),
+    vscode.commands.registerCommand(
+      "manimDock.renderOutlineSection",
+      async (item?: unknown) => {
+        await renderOutlineSectionCommand(
+          sidecar,
+          outlineProvider,
+          output,
+          item
+        );
       }
     ),
     vscode.commands.registerCommand(
@@ -1001,6 +1013,31 @@ async function renderCurrentSectionCommand(
     {
       sectionOnly: section,
       titleSuffix: ` · ${section}`,
+    }
+  );
+}
+
+async function renderOutlineSectionCommand(
+  sidecar: SidecarClient,
+  outlineProvider: OutlineProvider,
+  output: vscode.OutputChannel,
+  item?: unknown
+): Promise<void> {
+  const target = asSectionTarget(item);
+  if (!target) {
+    void vscode.window.showWarningMessage(
+      "Manim Dock: select a next_section row in Outline to render that section."
+    );
+    return;
+  }
+  await renderSceneCommand(
+    sidecar,
+    outlineProvider,
+    output,
+    { filePath: target.filePath, scene: { name: target.sceneName } },
+    {
+      sectionOnly: target.section,
+      titleSuffix: ` · ${target.section}`,
     }
   );
 }

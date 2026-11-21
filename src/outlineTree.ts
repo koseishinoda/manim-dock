@@ -82,19 +82,24 @@ class MethodNode extends vscode.TreeItem {
 class EventNode extends vscode.TreeItem {
   constructor(
     public readonly filePath: string,
+    public readonly sceneName: string,
     public readonly event: OutlineEvent
   ) {
     super(event.label, vscode.TreeItemCollapsibleState.None);
-    this.contextValue = "manimDock.event";
+    const isSection = event.kind === "next_section";
+    // Distinct context so Outline can show an inline Render Section play control.
+    this.contextValue = isSection ? "manimDock.section" : "manimDock.event";
     const targets = event.targets?.filter(Boolean) ?? [];
     // Grey secondary: mobject bindings (label already includes anim + target when known).
     this.description =
       targets.length > 0 ? targets.join(", ") : event.kind;
-    this.tooltip = targets.length
-      ? `${event.label}\ntargets: ${targets.join(", ")}`
-      : event.label;
+    this.tooltip = isSection
+      ? `${event.label}\nClick ▶ to render this section (QL)`
+      : targets.length
+        ? `${event.label}\ntargets: ${targets.join(", ")}`
+        : event.label;
     this.iconPath = new vscode.ThemeIcon(
-      event.kind === "next_section"
+      isSection
         ? "bookmark"
         : event.kind === "wait"
           ? "debug-pause"
@@ -108,6 +113,37 @@ class EventNode extends vscode.TreeItem {
       arguments: [filePath, event.range],
     };
   }
+}
+
+/** Outline ``next_section`` row (duck-typed for command args). */
+export function asSectionTarget(
+  item: unknown
+): { filePath: string; sceneName: string; section: string } | undefined {
+  if (!item || typeof item !== "object") {
+    return undefined;
+  }
+  const rec = item as {
+    filePath?: unknown;
+    sceneName?: unknown;
+    event?: { kind?: unknown; label?: unknown };
+  };
+  if (
+    typeof rec.filePath !== "string" ||
+    typeof rec.sceneName !== "string" ||
+    !rec.event ||
+    rec.event.kind !== "next_section" ||
+    typeof rec.event.label !== "string"
+  ) {
+    return undefined;
+  }
+  const m = rec.event.label.match(
+    /next_section\s*\(\s*(?:name\s*=\s*)?(['"])(.*?)\1/
+  );
+  const section = m?.[2]?.trim() || rec.event.label.trim();
+  if (!section || section.includes("(")) {
+    return undefined;
+  }
+  return { filePath: rec.filePath, sceneName: rec.sceneName, section };
 }
 
 /** Duck-type tree / command args (instanceof can fail across command invocations). */
@@ -371,7 +407,8 @@ export class OutlineProvider implements vscode.TreeDataProvider<OutlineNode> {
 
     if (element instanceof MethodNode) {
       return element.method.events.map(
-        (event) => new EventNode(element.filePath, event)
+        (event) =>
+          new EventNode(element.filePath, element.sceneName, event)
       );
     }
 

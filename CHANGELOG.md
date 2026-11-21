@@ -2,6 +2,11 @@
 
 Versioning follows **git tags** (`v0.2.12`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
 
+## 0.2.13
+
+- Outline: inline **▶** on each `next_section` row → Render This Section (QL)
+- Timeline: section render control labeled **▶ QL** (more visible)
+
 ## 0.2.12
 
 Stage speed (Nyquist long multi-class scenes):
