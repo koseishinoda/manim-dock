@@ -10,7 +10,17 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from manim_dock.snapshot import _png_size, snapshot_at_line, snapshot_cache_key
+from manim_dock.snapshot import (
+    _png_size,
+    local_import_fingerprint,
+    snapshot_at_line,
+    snapshot_cache_key,
+)
+from manim_dock.stage_transform import (
+    construct_prefix_canonical_many,
+    discover_focus_sections,
+    resolve_stage_elide_section,
+)
 from manim_dock.timeline import SceneTimeline, parse_file_timeline, parse_scene_timeline
 
 INDEXABLE_KINDS = frozenset({"play", "wait", "add", "next_section"})
@@ -117,19 +127,41 @@ def build_index_beats(
     src = _read_source(file_path, source)
     tl = _timeline(file_path, scene_name, src)
     path = Path(file_path)
-    beats: list[IndexBeat] = []
+    events: list[tuple[Any, int, str]] = []
+    lines: list[int] = []
     for ev in tl.events:
         if ev.kind not in INDEXABLE_KINDS:
             continue
         line = int(ev.range.end_line or ev.range.start_line or 0)
         if line < 1 and ev.kind != "next_section":
             continue
+        section = ev.section or ""
+        events.append((ev, line, section))
+        lines.append(line)
+
+    prefixes = construct_prefix_canonical_many(src, scene_name, lines)
+    imports = local_import_fingerprint(path, src)
+    focused = discover_focus_sections(src, scene_name)
+
+    beats: list[IndexBeat] = []
+    for ev, line, section in events:
+        if focused is not None and section and section not in focused:
+            elide = None
+        elif section:
+            elide = section
+        else:
+            elide = resolve_stage_elide_section(
+                src, scene_name, line, section_hint=None
+            )
         key = snapshot_cache_key(
             src,
             scene_name,
             line,
             quality=quality,
             file_path=path,
+            stage_elide_section=elide,
+            prefix=prefixes.get(line),
+            imports=imports,
         )
         beats.append(
             IndexBeat(
@@ -137,7 +169,7 @@ def build_index_beats(
                 kind=ev.kind,
                 label=ev.label,
                 source_line=line,
-                section=ev.section or "",
+                section=section,
                 cache_key=key,
             )
         )
@@ -283,8 +315,16 @@ def still_get(
     hit = _png_cached(root, beat.cache_key) if beat is not None else None
     if hit is None and beat is None:
         # No timeline beats — fall through to raw line snapshot key.
+        elide = resolve_stage_elide_section(
+            src, scene_name, until, section_hint=None
+        )
         key = snapshot_cache_key(
-            src, scene_name, until, quality=quality, file_path=path
+            src,
+            scene_name,
+            until,
+            quality=quality,
+            file_path=path,
+            stage_elide_section=elide,
         )
         hit = _png_cached(root, key)
 
@@ -325,6 +365,7 @@ def still_get(
         quality=quality,
         cache_dir=root,
         timeout=timeout,
+        # Hint for focus-aware section body elision (ignored unless focus()).
         skip_until_section=beat.section if beat and beat.section else None,
     )
     cached_n2, total2, _, _ = _counts(beats, root)

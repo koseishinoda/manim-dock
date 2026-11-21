@@ -1,6 +1,6 @@
 # Stage still index (design)
 
-**Status:** P0 + P1 + section render + P2-lite landed (`v0.2.11`)  
+**Status:** P0 + P1 + section render + P3 play fast-forward landed (`v0.2.12`)  
 
 **Problem:** Stage/`snapshot_at_line` is O(construct prefix). On long educational scenes this is the interactive bottleneck.  
 **Fixture:** `Nyquist_Stability_Criteria` / `scene3_assemble.py` → `Scene3_Nyquist_ArgumentPos` (ManimCE 0.19.2).
@@ -24,8 +24,10 @@
 | Cold `import manim` | ~0.8 s |
 | Import project helpers | ~1.7 s |
 | Stage → first play (L1109) | ~3.5 s |
-| Stage → mid section (L1378) | ~28 s |
-| Stage → last play (L1699), warm `media/Tex`, PNG miss | ~19 s |
+| Stage → mid section (L1450), warm Tex, stock `-s` | ~12 s |
+| Stage → mid section (L1450), warm Tex, P3 fast-forward | ~4.5 s |
+| Stage → Semicircle last section, full prefix | ~35 s |
+| Stage → Semicircle last section, elide + strip classes | ~1 s |
 | Stage PNG cache hit | ~0.06 s |
 | Render QL `skip_until` last section | ~26 s |
 | Render QL ≈ whole ArgumentPos | ~218 s |
@@ -221,11 +223,15 @@ Section render still runs construct prefix with `skip_animations` (≈ Stage lat
 
 ### P2 — Optional checkpoints
 
-**P2-lite (landed):** Stage captures for a beat in section *N* apply `skip_animations` on prior `next_section`s before the early-exit still (same final frame, less prior play work). Full mobject-state pickle resume remains deferred (fragile across Manim versions).
+**P2-lite:** Section `skip_animations` helps **movie** encode, not Stage (Cairo already skips frames under `save_last_frame`). Stage no longer pays libcst `skip_until` on large files. Full mobject-state pickle resume remains deferred (fragile across Manim versions).
 
-### P3 — Play fast-forward research
+### P3 — Play fast-forward (landed)
 
-cProfile shows `Transform.begin` deepcopy ≈ large fraction of Stage time under `-s`. Investigate a **worker-only** “apply animation end state without deepcopy” path for index capture. Upstream-friendly; never required in user projects. Do not block P0–P1 on this.
+Worker-only Cairo `play` patch: apply animation **end state** without `begin()` / `mobject.copy` / updater ticks. Same final PNG (verified identical hash on ArgumentPos L1450); ~12s → ~4.5s warm-Tex mid-cursor when the full prefix must run.
+
+### P3b — Focus-aware section elision (landed)
+
+`skip_animations` / `focus()` still **construct** every prior MathTex. When Stage sees `self.focus()` bound to the cursor section, it **drops other section bodies** (keeps preamble + nested `def`s, stubs `active_panel`). ArgumentSemicircle “Vanishing semicircle contribution” ~35s → ~3s. Scenes without `focus()` keep full-prefix capture (correctness).
 
 ## API sketch (sidecar)
 

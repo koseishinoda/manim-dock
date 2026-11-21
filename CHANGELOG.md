@@ -1,6 +1,15 @@
 # Changelog
 
-Versioning follows **git tags** (`v0.2.11`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+Versioning follows **git tags** (`v0.2.12`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
+
+## 0.2.12
+
+Stage speed (Nyquist long multi-class scenes):
+
+- Fix still-index **rebuilding every beat key with a full AST parse** (~6s per Stage move on ArgumentSemicircle) → batch prefix (~0.2s)
+- Fix **cache key mismatch** with section elision (was re-capturing on every cursor move)
+- Share project `media/Tex` / `media/texts`; play end-state fast-forward; section body elision + strip sibling `Scene*` classes
+- Focused last Semicircle section: miss ~1–6s, **cache hit ~0.3s** (was ~7s+ even on “hit”)
 
 ## 0.2.11
 

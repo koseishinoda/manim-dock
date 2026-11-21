@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SNAPSHOT_VERSION = "v4-prefix"
+SNAPSHOT_VERSION = "v6-strip-elide"
 DEFAULT_TIMEOUT = 60
 EARLY_EXIT_IMPORT = "from manim.utils.exceptions import EndSceneEarlyException"
 
@@ -167,61 +167,16 @@ def construct_prefix_canonical(
     change this string. Whitespace-only / comment-only edits outside the kept
     AST also do not (``ast.dump`` without attributes).
     """
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as exc:
-        return f"SYNTAX_ERROR\0{exc}"
+    from manim_dock.stage_transform import (
+        construct_prefix_index,
+        prefix_from_index,
+    )
 
-    if not isinstance(tree, ast.Module):
-        return "NOT_MODULE"
-
-    bits: list[str] = [f"scene={scene_name}", f"until={active_until_line}"]
-
-    for node in tree.body:
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            bits.append(ast.dump(node, include_attributes=False))
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Assign, ast.AnnAssign)):
-            # Module-level helpers / constants in the same file.
-            bits.append(ast.dump(node, include_attributes=False))
-        elif isinstance(node, ast.ClassDef) and node.name == scene_name:
-            construct = None
-            for item in node.body:
-                if _is_construct(item):
-                    construct = item
-                    break
-            if construct is None:
-                bits.append(ast.dump(node, include_attributes=False))
-                continue
-
-            if active_until_line < 1:
-                new_body_stmts: list[ast.stmt] = []
-            else:
-                anchor = _find_anchor_in_construct(construct, active_until_line)
-                past = [False]
-                if anchor is None:
-                    # Class attribute / above construct → same as empty prefix.
-                    new_body_stmts = []
-                else:
-                    _body, _idx = anchor
-                    new_body_stmts = _truncate_stmt_list(
-                        list(construct.body),
-                        _body[_idx],
-                        past,
-                    )
-
-            new_construct = copy.copy(construct)
-            new_construct.body = new_body_stmts
-            class_body: list[ast.stmt] = []
-            for item in node.body:
-                if item is construct:
-                    class_body.append(new_construct)
-                else:
-                    class_body.append(item)
-            scene_cls = copy.copy(node)
-            scene_cls.body = class_body
-            bits.append(ast.dump(scene_cls, include_attributes=False))
-
-    return "\n".join(bits)
+    indexed = construct_prefix_index(source, scene_name)
+    if isinstance(indexed, str):
+        return indexed
+    header, stmts = indexed
+    return prefix_from_index(header, stmts, active_until_line)
 
 
 def local_import_fingerprint(file_path: str | Path | None, source: str) -> str:
@@ -267,18 +222,30 @@ def snapshot_cache_key(
     *,
     quality: str = "l",
     file_path: str | Path | None = None,
+    stage_elide_section: str | None = None,
+    prefix: str | None = None,
+    imports: str | None = None,
 ) -> str:
     """Content-addressed key for a Stage still (prefix digest, not whole file)."""
-    prefix = construct_prefix_canonical(source, scene_name, active_until_line)
-    imports = local_import_fingerprint(file_path, source)
+    prefix_val = (
+        prefix
+        if prefix is not None
+        else construct_prefix_canonical(source, scene_name, active_until_line)
+    )
+    imports_val = (
+        imports
+        if imports is not None
+        else local_import_fingerprint(file_path, source)
+    )
     payload = "\0".join(
         [
             SNAPSHOT_VERSION,
             (quality or "l").strip().lower(),
             scene_name,
             str(active_until_line),
-            prefix,
-            imports,
+            prefix_val,
+            imports_val,
+            f"elide:{stage_elide_section}" if stage_elide_section else "elide:",
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -619,18 +586,33 @@ def _capture_inprocess(
                 base.error = f"scene class not found after load: {scene_name}"
                 return base
             media_root.mkdir(parents=True, exist_ok=True)
+            # PNG under Dock cache; reuse project Tex/texts (avoid cold LaTeX).
+            project_media = write_cwd / "media"
+            project_tex = project_media / "Tex"
+            project_texts = project_media / "texts"
+            project_tex.mkdir(parents=True, exist_ok=True)
+            project_texts.mkdir(parents=True, exist_ok=True)
             cfg = {
                 "quality": _quality_tempconfig(quality),
                 "save_last_frame": True,
                 "preview": False,
                 "verbosity": "ERROR",
+                "progress_bar": "none",
                 "media_dir": str(media_root),
+                "tex_dir": str(project_tex),
+                "text_dir": str(project_texts),
                 "disable_caching": True,
             }
             base.command = ["inprocess", scene_name, str(temp_path)]
             # Keep stdout clean for stdio RPC workers (Manim logs → buffer).
+            from manim_dock.stage_transform import stage_fast_play_patches
+
             log_buf = io.StringIO()
-            with tempconfig(cfg), contextlib.redirect_stdout(log_buf):
+            with (
+                stage_fast_play_patches(),
+                tempconfig(cfg),
+                contextlib.redirect_stdout(log_buf),
+            ):
                 scene = scene_cls()
                 try:
                     scene.render()
@@ -781,12 +763,25 @@ def snapshot_at_line(
                 error=str(exc),
             )
 
+    from manim_dock.stage_transform import (
+        prepare_stage_source,
+        resolve_stage_elide_section,
+        strip_other_scene_classes,
+    )
+
+    elide_section = resolve_stage_elide_section(
+        source,
+        scene_name,
+        active_until_line,
+        section_hint=skip_until_section,
+    )
     key = snapshot_cache_key(
         source,
         scene_name,
         active_until_line,
         quality=quality,
         file_path=path,
+        stage_elide_section=elide_section,
     )
     cache_root = Path(cache_dir) if cache_dir else _default_cache_dir()
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -812,54 +807,80 @@ def snapshot_at_line(
         return base
 
     try:
-        transformed = inject_early_exit(
-            source, active_until_line, scene_name=scene_name
+        transformed = prepare_stage_source(
+            source,
+            scene_name,
+            active_until_line,
+            inject_early_exit=lambda src, line: inject_early_exit(
+                src, line, scene_name=scene_name
+            ),
+            elide_section=elide_section,
         )
     except (SyntaxError, ValueError) as exc:
         base.error = f"snapshot transform failed: {exc}"
         return base
 
-    # P2-lite: skip prior section animations before the early exit (same final still).
-    if skip_until_section:
-        try:
-            from manim_dock.render import _apply_skip_until_section
-
-            transformed = _apply_skip_until_section(
-                transformed, skip_until_section
-            )
-        except ValueError:
-            pass
-        except Exception:  # noqa: BLE001 — never block Stage on skip transform
-            pass
-
     write_cwd = cwd if path.is_file() else Path.cwd()
     write_path = path if path.is_file() else write_cwd / f"{scene_name}.py"
     effective_timeout = DEFAULT_TIMEOUT if timeout is None else timeout
 
-    if prefer_inprocess:
-        inproc = _capture_inprocess(
+    def _run_capture(code: str, png_path: Path) -> SnapshotResult:
+        if prefer_inprocess:
+            inproc = _capture_inprocess(
+                write_cwd=write_cwd,
+                write_path=write_path,
+                transformed=code,
+                scene_name=scene_name,
+                quality=quality,
+                cached_png=png_path,
+                base=base,
+            )
+            if inproc is not None and inproc.ok:
+                return inproc
+            if (
+                inproc is not None
+                and inproc.error
+                and "not found after load" in inproc.error
+            ):
+                return inproc
+        return _capture_via_cli(
             write_cwd=write_cwd,
             write_path=write_path,
-            transformed=transformed,
+            transformed=code,
             scene_name=scene_name,
             quality=quality,
-            cached_png=cached_png,
+            timeout=effective_timeout,
+            manim_cmd=manim_cmd,
+            cached_png=png_path,
             base=base,
         )
-        if inproc is not None and inproc.ok:
-            return inproc
-        # Manim missing → fall through to CLI. Soft in-process failure also falls back.
-        if inproc is not None and inproc.error and "not found after load" in inproc.error:
-            return inproc
 
-    return _capture_via_cli(
-        write_cwd=write_cwd,
-        write_path=write_path,
-        transformed=transformed,
-        scene_name=scene_name,
+    result = _run_capture(transformed, cached_png)
+    if result.ok or not elide_section:
+        return result
+
+    # Elision can break sections that need prior locals — retry full prefix.
+    try:
+        fallback = inject_early_exit(
+            source, active_until_line, scene_name=scene_name
+        )
+        fallback = strip_other_scene_classes(fallback, scene_name)
+    except (SyntaxError, ValueError):
+        return result
+    fb_key = snapshot_cache_key(
+        source,
+        scene_name,
+        active_until_line,
         quality=quality,
-        timeout=effective_timeout,
-        manim_cmd=manim_cmd,
-        cached_png=cached_png,
-        base=base,
+        file_path=path,
+        stage_elide_section=None,
     )
+    fb_png = cache_root / f"{fb_key}.png"
+    base.cache_key = fb_key
+    base.error = None
+    base.ok = False
+    base.engine = ""
+    base.png_path = None
+    if fb_png.is_file() and fb_png.stat().st_size > 0:
+        return _finish_cached_png(base, fb_png, fb_png, engine="cache")
+    return _run_capture(fallback, fb_png)

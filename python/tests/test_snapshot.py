@@ -6,11 +6,36 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from manim_dock.snapshot import (
-    inject_early_exit,
-    snapshot_at_line,
-    snapshot_cache_key,
+from manim_dock.snapshot import inject_early_exit, snapshot_at_line, snapshot_cache_key
+from manim_dock.stage_transform import (
+    discover_focus_sections,
+    elide_unfocused_section_bodies,
+    resolve_stage_elide_section,
+    section_name_at_line,
+    stage_fast_play_patches,
+    strip_other_scene_classes,
 )
+
+FOCUS_SAMPLE = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        hdr = Text("H")
+        self.add(hdr)
+        self.next_section("Alpha")
+        a = MathTex(r"a")
+        self.play(FadeIn(a))
+        def replace_panel(new_panel):
+            self.play(FadeIn(new_panel))
+        self.next_section("Beta")
+        b = MathTex(r"b")
+        self.play(FadeIn(b))
+        self.focus()
+        self.next_section("Gamma")
+        g = MathTex(r"g")
+        self.play(FadeIn(g))
+'''
 
 
 SAMPLE = '''
@@ -320,3 +345,82 @@ def test_snapshot_timeout(tmp_path: Path):
                 )
     assert not result.ok
     assert "timed out" in (result.error or "")
+
+
+def test_stage_fast_play_patches_restore_or_noop():
+    """Patches must be uninstall-safe: restore CairoRenderer.play when Manim exists."""
+    try:
+        from manim.renderer.cairo_renderer import CairoRenderer
+    except ImportError:
+        with stage_fast_play_patches():
+            pass
+        return
+    original = CairoRenderer.play
+    with stage_fast_play_patches():
+        assert CairoRenderer.play is not original
+    assert CairoRenderer.play is original
+
+
+def test_discover_focus_binds_bare_focus_to_next_section():
+    assert discover_focus_sections(FOCUS_SAMPLE, "Demo") == frozenset({"Gamma"})
+
+
+def test_section_name_at_line_tracks_next_section():
+    lines = FOCUS_SAMPLE.splitlines()
+    gamma_line = next(i for i, ln in enumerate(lines, 1) if 'MathTex(r"g")' in ln)
+    assert section_name_at_line(FOCUS_SAMPLE, "Demo", gamma_line) == "Gamma"
+    alpha_line = next(i for i, ln in enumerate(lines, 1) if 'MathTex(r"a")' in ln)
+    assert section_name_at_line(FOCUS_SAMPLE, "Demo", alpha_line) == "Alpha"
+
+
+def test_resolve_stage_elide_only_when_focused():
+    lines = FOCUS_SAMPLE.splitlines()
+    gamma_line = next(i for i, ln in enumerate(lines, 1) if 'MathTex(r"g")' in ln)
+    assert (
+        resolve_stage_elide_section(FOCUS_SAMPLE, "Demo", gamma_line) == "Gamma"
+    )
+    alpha_line = next(i for i, ln in enumerate(lines, 1) if 'MathTex(r"a")' in ln)
+    # Unfocused section while focus() is active → no elision.
+    assert resolve_stage_elide_section(FOCUS_SAMPLE, "Demo", alpha_line) is None
+
+
+def test_resolve_stage_elide_without_focus_uses_section():
+    src = '''
+from manim import *
+class Demo(Scene):
+    def construct(self):
+        self.next_section("Alpha")
+        self.play(FadeIn(Text("a")))
+        self.next_section("Beta")
+        self.play(FadeIn(Text("b")))
+'''
+    lines = src.splitlines()
+    beta = next(i for i, ln in enumerate(lines, 1) if 'Text("b")' in ln)
+    assert resolve_stage_elide_section(src, "Demo", beta) == "Beta"
+
+
+def test_strip_other_scene_classes():
+    src = '''
+from manim import *
+class SceneA(Scene):
+    def construct(self):
+        self.wait()
+class SceneB(Scene):
+    def construct(self):
+        self.wait()
+'''
+    out = strip_other_scene_classes(src, "SceneB")
+    assert "SceneA" not in out
+    assert "SceneB" in out
+
+
+def test_elide_keeps_preamble_defs_and_focused_body():
+    out = elide_unfocused_section_bodies(FOCUS_SAMPLE, "Demo", "Gamma")
+    # Prior section plays dropped; focused body + helper def kept.
+    assert "FadeIn(a)" not in out
+    assert "FadeIn(b)" not in out
+    assert "FadeIn(g)" in out
+    assert "def replace_panel" in out
+    assert "active_panel = VGroup()" in out
+    assert "Text('H')" in out or 'Text("H")' in out
+    assert "Gamma" in out and "Alpha" in out

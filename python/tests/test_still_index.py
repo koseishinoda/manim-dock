@@ -84,10 +84,17 @@ def test_still_index_builds_one_missing(tmp_path: Path):
 
     def fake_snap(path, scene_name, until, **kwargs):
         from manim_dock.snapshot import SnapshotResult, snapshot_cache_key
+        from manim_dock.stage_transform import resolve_stage_elide_section
 
         src = SAMPLE
+        elide = resolve_stage_elide_section(src, scene_name, until)
         key = snapshot_cache_key(
-            src, scene_name, until, quality="l", file_path=path
+            src,
+            scene_name,
+            until,
+            quality="l",
+            file_path=path,
+            stage_elide_section=elide,
         )
         out = Path(kwargs["cache_dir"]) / f"{key}.png"
         out.write_bytes(
