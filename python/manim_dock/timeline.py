@@ -317,9 +317,24 @@ def _methods_by_name(
 def _collect_calls_in_order(
     fn: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> list[ast.Call]:
+    """Collect play/wait/add/next_section (and helper) calls in statement order.
+
+    Does **not** descend into nested ``def`` / ``class`` bodies — those plays are
+    not construct-sequence beats (Stage/Timeline). Class-level ``self.helper()``
+    expansion still happens via ``_expand_method``.
+    """
     calls: list[ast.Call] = []
 
     class Visitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
         def visit_Call(self, node: ast.Call) -> None:
             if _call_name(node) is not None:
                 calls.append(node)

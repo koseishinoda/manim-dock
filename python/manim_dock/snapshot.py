@@ -26,9 +26,9 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any  # noqa: F401 — used by ladder still binder
 
-SNAPSHOT_VERSION = "v6-strip-elide"
+SNAPSHOT_VERSION = "v7-anim-strip"
 DEFAULT_TIMEOUT = 60
 EARLY_EXIT_IMPORT = "from manim.utils.exceptions import EndSceneEarlyException"
 
@@ -450,6 +450,123 @@ def _find_anchor_in_construct(
     return None
 
 
+def inject_still_saves_and_early_exit(
+    source: str,
+    scene_name: str,
+    line_to_key: dict[int, str],
+    until_line: int,
+) -> str:
+    """One AST pass: still-saves after beat lines, then early-exit after ``until_line``.
+
+    Must not unparse between save injection and early-exit — line numbers have to
+    stay aligned with Timeline beat ``source_line`` values.
+    """
+    tree = ast.parse(source)
+    if not isinstance(tree, ast.Module):
+        raise ValueError("expected a module")
+    construct = _find_construct(tree, until_line, scene_name)
+    if construct is None:
+        raise ValueError(f"no construct() found for scene {scene_name}")
+
+    raise_stmt = ast.parse("raise EndSceneEarlyException()").body[0]
+    ast.fix_missing_locations(raise_stmt)
+
+    def save_stmt(key: str) -> ast.stmt:
+        stmt = ast.parse(f"self._manim_dock_still({key!r})").body[0]
+        ast.fix_missing_locations(stmt)
+        return stmt
+
+    def patch_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        out: list[ast.stmt] = []
+        for stmt in body:
+            out.append(stmt)
+            if isinstance(
+                stmt, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                continue
+            end = _stmt_end_line(stmt)
+            key = line_to_key.get(end) if line_to_key else None
+            if key:
+                out.append(save_stmt(key))
+            for attr in ("body", "orelse", "finalbody"):
+                child = getattr(stmt, attr, None)
+                if isinstance(child, list) and child and isinstance(child[0], ast.stmt):
+                    setattr(stmt, attr, patch_body(child))
+            if isinstance(stmt, ast.Try):
+                for handler in stmt.handlers:
+                    handler.body = patch_body(handler.body)
+        return out
+
+    construct.body = patch_body(list(construct.body))
+
+    if until_line < 1:
+        construct.body.insert(0, raise_stmt)
+    else:
+        anchor = _find_anchor_in_construct(construct, until_line)
+        if anchor is None:
+            construct.body.insert(0, raise_stmt)
+        else:
+            body, idx = anchor
+            # Place exit after the beat save (save was inserted at idx+1).
+            insert_at = idx + 1
+            if insert_at < len(body):
+                nxt = body[insert_at]
+                if (
+                    isinstance(nxt, ast.Expr)
+                    and isinstance(nxt.value, ast.Call)
+                    and isinstance(nxt.value.func, ast.Attribute)
+                    and nxt.value.func.attr == "_manim_dock_still"
+                ):
+                    insert_at += 1
+            body.insert(insert_at, raise_stmt)
+
+    _ensure_early_exit_import(tree)
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
+
+
+def inject_still_saves(
+    source: str,
+    scene_name: str,
+    line_to_key: dict[int, str],
+) -> str:
+    """Insert ``self._manim_dock_still('<key>')`` after statements at ``line_to_key``."""
+    if not line_to_key:
+        return source
+    until = max(line_to_key)
+    # Reuse combined helper without early-exit by until past last save only.
+    # Prefer the dedicated combined path for ladders.
+    tree = ast.parse(source)
+    if not isinstance(tree, ast.Module):
+        raise ValueError("expected a module")
+    construct = _find_construct(tree, until, scene_name)
+    if construct is None:
+        raise ValueError(f"no construct() found for scene {scene_name}")
+
+    def save_stmt(key: str) -> ast.stmt:
+        stmt = ast.parse(f"self._manim_dock_still({key!r})").body[0]
+        ast.fix_missing_locations(stmt)
+        return stmt
+
+    def patch_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        out: list[ast.stmt] = []
+        for stmt in body:
+            out.append(stmt)
+            if isinstance(
+                stmt, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                continue
+            end = _stmt_end_line(stmt)
+            key = line_to_key.get(end)
+            if key:
+                out.append(save_stmt(key))
+        return out
+
+    construct.body = patch_body(list(construct.body))
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
+
+
 def inject_early_exit(
     source: str, until_line: int, scene_name: str | None = None
 ) -> str:
@@ -539,6 +656,35 @@ def _finish_cached_png(
     return base
 
 
+def _bind_ladder_still_saver(scene_cls: type, cache_dir: Path) -> None:
+    """Attach ``_manim_dock_still`` used by ladder still injection."""
+
+    cache_root = Path(cache_dir)
+
+    def _manim_dock_still(self: Any, key: str) -> None:
+        dest = cache_root / f"{key}.png"
+        try:
+            # ``stage_fast_play_patches`` advances mobject state without painting.
+            # Without a redraw, ``get_image()`` returns an empty gray buffer and
+            # Stage caches that as a successful still (looks like “nothing”).
+            renderer = self.renderer
+            renderer.static_image = None
+            renderer.update_frame(self, ignore_skipping=True)
+            image = renderer.camera.get_image()
+            image.save(str(dest))
+            return
+        except Exception:
+            pass
+        try:
+            # ManimCE fallback: force a last-frame write into our cache path.
+            self.renderer.file_writer.output_image = str(dest)
+            self.renderer.file_writer.save_final_image(self.renderer.camera.get_image())
+        except Exception:
+            return
+
+    scene_cls._manim_dock_still = _manim_dock_still  # type: ignore[attr-defined]
+
+
 def _capture_inprocess(
     *,
     write_cwd: Path,
@@ -548,6 +694,7 @@ def _capture_inprocess(
     quality: str,
     cached_png: Path,
     base: SnapshotResult,
+    ladder_cache_dir: Path | None = None,
 ) -> SnapshotResult | None:
     """Render last frame in-process. Returns None if Manim is unavailable."""
     try:
@@ -585,6 +732,8 @@ def _capture_inprocess(
             if scene_cls is None:
                 base.error = f"scene class not found after load: {scene_name}"
                 return base
+            if ladder_cache_dir is not None:
+                _bind_ladder_still_saver(scene_cls, ladder_cache_dir)
             media_root.mkdir(parents=True, exist_ok=True)
             # PNG under Dock cache; reuse project Tex/texts (avoid cold LaTeX).
             project_media = write_cwd / "media"
@@ -837,11 +986,10 @@ def snapshot_at_line(
             )
             if inproc is not None and inproc.ok:
                 return inproc
-            if (
-                inproc is not None
-                and inproc.error
-                and "not found after load" in inproc.error
-            ):
+            # Manim ran in-process but the scene failed (e.g. body-elision
+            # NameError). Do not re-pay the same failure via CLI — callers
+            # may try a cheaper transform next.
+            if inproc is not None:
                 return inproc
         return _capture_via_cli(
             write_cwd=write_cwd,
@@ -859,7 +1007,54 @@ def snapshot_at_line(
     if result.ok or not elide_section:
         return result
 
-    # Elision can break sections that need prior locals — retry full prefix.
+    # Body elision can break sections that need prior locals. Tier 2: keep
+    # assignments, strip prior play/wait/add. Tier 3: full prefix.
+    # Always alias the successful PNG onto ``cached_png`` (body-elide key) so
+    # still_get / still-index lookups hit on the next cursor move.
+    def _alias_to_primary(src_png: Path) -> None:
+        try:
+            if src_png.resolve() == cached_png.resolve():
+                return
+            if src_png.is_file():
+                cached_png.write_bytes(src_png.read_bytes())
+        except OSError:
+            pass
+
+    from manim_dock.stage_transform import strip_prior_section_animations
+
+    try:
+        anim = inject_early_exit(
+            source, active_until_line, scene_name=scene_name
+        )
+        anim = strip_prior_section_animations(anim, scene_name, elide_section)
+        anim = strip_other_scene_classes(anim, scene_name)
+    except (SyntaxError, ValueError):
+        anim = None
+    if anim is not None:
+        anim_key = snapshot_cache_key(
+            source,
+            scene_name,
+            active_until_line,
+            quality=quality,
+            file_path=path,
+            stage_elide_section=f"anims:{elide_section}",
+        )
+        anim_png = cache_root / f"{anim_key}.png"
+        base.cache_key = key
+        base.error = None
+        base.ok = False
+        base.engine = ""
+        base.png_path = None
+        if anim_png.is_file() and anim_png.stat().st_size > 0:
+            _alias_to_primary(anim_png)
+            return _finish_cached_png(base, anim_png, cached_png, engine="cache")
+        anim_result = _run_capture(anim, anim_png)
+        if anim_result.ok and anim_result.png_path:
+            _alias_to_primary(Path(anim_result.png_path))
+            anim_result.cache_key = key
+            anim_result.png_path = str(cached_png.resolve())
+            return anim_result
+
     try:
         fallback = inject_early_exit(
             source, active_until_line, scene_name=scene_name
@@ -876,11 +1071,17 @@ def snapshot_at_line(
         stage_elide_section=None,
     )
     fb_png = cache_root / f"{fb_key}.png"
-    base.cache_key = fb_key
+    base.cache_key = key
     base.error = None
     base.ok = False
     base.engine = ""
     base.png_path = None
     if fb_png.is_file() and fb_png.stat().st_size > 0:
-        return _finish_cached_png(base, fb_png, fb_png, engine="cache")
-    return _run_capture(fallback, fb_png)
+        _alias_to_primary(fb_png)
+        return _finish_cached_png(base, fb_png, cached_png, engine="cache")
+    full_result = _run_capture(fallback, fb_png)
+    if full_result.ok and full_result.png_path:
+        _alias_to_primary(Path(full_result.png_path))
+        full_result.cache_key = key
+        full_result.png_path = str(cached_png.resolve())
+    return full_result

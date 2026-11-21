@@ -2,6 +2,16 @@
 
 Versioning follows **git tags** (`v0.2.12`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
 
+## 0.2.14
+
+- **Stage fundamental path:** interactive stills are **index lookup first**; on miss, fill the whole current section in **one construct ladder** (O(prefix) once), then scrub hits are ~1ms — not O(prefix) per cursor move
+- Stage: body-elision → anim-strip → full fallback; alias PNG to index key; do not CLI-retry in-process failures
+- Fix Stage body-elision without ``focus()``: was dropping prior sections and caching preamble-only stills at late ``next_section`` lines (ArgumentSemicircle Section D empty Stage)
+- Fix Stage ladder stills: redraw camera before ``get_image()`` after play fast-forward (was caching solid-gray empty PNGs)
+- Fix Stage/Timeline sync for multi-line plays; keep warm worker on scrub; memoized beat index; section-scoped render transforms
+- Outline/Timeline/Stage: ignore `self.play` / `wait` inside **nested `def` helpers** (not construct-sequence beats; class-level `self.helper()` still expands)
+- Render Section (QL): do **not** share the Stage warm worker (ladder was blocking ▶ QL)
+
 ## 0.2.13
 
 - Outline: inline **▶** on each `next_section` row → Render This Section (QL)

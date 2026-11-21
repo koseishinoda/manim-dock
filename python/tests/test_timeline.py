@@ -49,6 +49,29 @@ class Demo(Scene):
     assert abs(wait.duration - 0.25) < 1e-9
 
 
+def test_nested_def_plays_are_not_timeline_beats():
+    """Plays inside nested helpers are not construct-sequence Stage beats."""
+    source = """
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        self.next_section("Main")
+        def replace_panel(new_panel):
+            self.play(FadeIn(new_panel))
+            self.wait(0.1)
+        title = Text("Hi")
+        self.play(Write(title))
+        replace_panel(Text("x"))
+"""
+    tl = parse_scene_timeline(source, "<mem>", "Demo")
+    plays = [e for e in tl.events if e.kind == "play"]
+    waits = [e for e in tl.events if e.kind == "wait"]
+    assert len(plays) == 1
+    assert plays[0].label == "Write title"
+    assert not waits
+
+
 def test_play_targets_single_and_multi():
     source = """
 from manim import *

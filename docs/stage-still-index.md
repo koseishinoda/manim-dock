@@ -1,6 +1,6 @@
 # Stage still index (design)
 
-**Status:** P0 + P1 + section render + P3 play fast-forward landed (`v0.2.12`)  
+**Status:** P0 + P1 + section render + P3 play fast-forward landed; interactive warm-worker fix (`v0.2.15`)  
 
 **Problem:** Stage/`snapshot_at_line` is O(construct prefix). On long educational scenes this is the interactive bottleneck.  
 **Fixture:** `Nyquist_Stability_Criteria` / `scene3_assemble.py` → `Scene3_Nyquist_ArgumentPos` (ManimCE 0.19.2).
@@ -100,7 +100,7 @@ BeatId = {
 }
 ```
 
-Stage scrub maps cursor/scrub-line → **last beat with `source_line <= cursor`** (same rule as `inject_early_exit` anchoring).
+Stage scrub maps cursor/scrub-line → **beat whose statement contains the cursor**, else the last beat with `source_line <= cursor` (aligned with `inject_early_exit` multi-line anchoring).
 
 ## Cache key schema
 
@@ -166,7 +166,7 @@ build_index(scene, from_beat=k):
 
 **Capture implementation (phase 1):** existing `inject_early_exit` + in-process render in the worker (same semantics as `snapshot_at_line`). Paying O(prefix) once per beat during idle is acceptable; interactive path must not.
 
-**Capture optimization (phase 1.5, same worker session):** when building a contiguous ladder in one process, avoid restarting from line 0 for every beat if a safe fast-forward exists. Phase 1 may still restart per beat (correct, slower index build). Phase 2 checkpoints make ladder builds incremental.
+**Capture optimization (phase 1.5, same worker session):** **landed** — `capture_section_ladder` injects `_manim_dock_still(key)` after each beat in one AST pass, runs construct once, writes every section PNG. Interactive Stage: lookup → on miss run section ladder → lookup. Phase 2 checkpoints (resume across sections) still optional.
 
 ## Warm worker
 

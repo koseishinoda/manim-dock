@@ -232,13 +232,39 @@ def _strip_skip_animations(call: cst.Call) -> cst.Call:
 
 
 class _SkipUntilSectionTransformer(cst.CSTTransformer):
-    def __init__(self, section_name: str) -> None:
+    """Mark prior ``next_section`` calls with ``skip_animations=True``.
+
+    When ``scene_name`` is set, only that scene class is rewritten — other
+    scenes in the same file (common in multi-scene lessons) are left alone.
+    """
+
+    def __init__(self, section_name: str, scene_name: str | None = None) -> None:
         self.section_name = section_name
+        self.scene_name = scene_name
         self.found_target = False
+        self._class_stack: list[str] = []
+
+    def visit_ClassDef(self, node: cst.ClassDef) -> bool:
+        self._class_stack.append(node.name.value)
+        return True
+
+    def leave_ClassDef(
+        self, original_node: cst.ClassDef, updated_node: cst.ClassDef
+    ) -> cst.ClassDef:
+        if self._class_stack:
+            self._class_stack.pop()
+        return updated_node
+
+    def _in_target_scene(self) -> bool:
+        if self.scene_name is None:
+            return True
+        return bool(self._class_stack) and self._class_stack[-1] == self.scene_name
 
     def leave_Call(
         self, original_node: cst.Call, updated_node: cst.Call
     ) -> cst.Call:
+        if not self._in_target_scene():
+            return updated_node
         if not _is_self_next_section(original_node):
             return updated_node
         name = _section_name_from_call(original_node)
@@ -253,11 +279,28 @@ class _SkipUntilSectionTransformer(cst.CSTTransformer):
         return updated_node
 
 
-def _iter_section_names(module: cst.Module) -> list[str]:
+def _iter_section_names(
+    module: cst.Module, scene_name: str | None = None
+) -> list[str]:
     names: list[str] = []
 
     class _Collector(cst.CSTVisitor):
+        def __init__(self) -> None:
+            self._class_stack: list[str] = []
+
+        def visit_ClassDef(self, node: cst.ClassDef) -> bool:
+            self._class_stack.append(node.name.value)
+            return True
+
+        def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
+            if self._class_stack:
+                self._class_stack.pop()
+
         def visit_Call(self, node: cst.Call) -> bool:
+            if scene_name is not None and (
+                not self._class_stack or self._class_stack[-1] != scene_name
+            ):
+                return True
             if _is_self_next_section(node):
                 name = _section_name_from_call(node)
                 if name is not None:
@@ -309,15 +352,38 @@ def _ensure_early_exit_import_module(module: cst.Module) -> cst.Module:
 
 
 class _InsertEarlyExitAfterSection(cst.CSTTransformer):
-    """Truncate ``construct`` at the next ``next_section`` after ``section_name``."""
+    """Truncate ``construct`` at the next ``next_section`` after ``section_name``.
 
-    def __init__(self, section_name: str) -> None:
+    When ``scene_name`` is set, only that scene's ``construct`` is truncated.
+    """
+
+    def __init__(self, section_name: str, scene_name: str | None = None) -> None:
         self.section_name = section_name
+        self.scene_name = scene_name
         self.inserted = False
+        self._class_stack: list[str] = []
+
+    def visit_ClassDef(self, node: cst.ClassDef) -> bool:
+        self._class_stack.append(node.name.value)
+        return True
+
+    def leave_ClassDef(
+        self, original_node: cst.ClassDef, updated_node: cst.ClassDef
+    ) -> cst.ClassDef:
+        if self._class_stack:
+            self._class_stack.pop()
+        return updated_node
+
+    def _in_target_scene(self) -> bool:
+        if self.scene_name is None:
+            return True
+        return bool(self._class_stack) and self._class_stack[-1] == self.scene_name
 
     def leave_FunctionDef(
         self, original_node: cst.FunctionDef, updated_node: cst.FunctionDef
     ) -> cst.FunctionDef:
+        if not self._in_target_scene():
+            return updated_node
         if updated_node.name.value != "construct":
             return updated_node
         block = updated_node.body
@@ -349,37 +415,48 @@ class _InsertEarlyExitAfterSection(cst.CSTTransformer):
         )
 
 
-def _apply_skip_until_section(source: str, section_name: str) -> str:
+def _apply_skip_until_section(
+    source: str, section_name: str, scene_name: str | None = None
+) -> str:
     """Return source with ``skip_animations=True`` on sections before ``section_name``.
 
     Detects names from ``self.next_section("Name")`` or ``self.next_section(name="Name")``.
     The target section is left without skip. Later sections are unchanged.
+    When ``scene_name`` is set, only that scene class is considered.
     Raises ``ValueError`` if the target section name is not found.
     """
     if not section_name:
         raise ValueError("section_name must be non-empty")
     module = cst.parse_module(source)
-    if section_name not in _iter_section_names(module):
-        raise ValueError(f"section not found: {section_name!r}")
-    transformer = _SkipUntilSectionTransformer(section_name)
+    if section_name not in _iter_section_names(module, scene_name):
+        where = f" in scene {scene_name!r}" if scene_name else ""
+        raise ValueError(f"section not found{where}: {section_name!r}")
+    transformer = _SkipUntilSectionTransformer(section_name, scene_name)
     updated = module.visit(transformer)
     return updated.code
 
 
-def _apply_section_only(source: str, section_name: str) -> str:
+def _apply_section_only(
+    source: str, section_name: str, scene_name: str | None = None
+) -> str:
     """Render only ``section_name``: skip prior, early-exit before the next section.
 
     Stops ``construct`` with ``EndSceneEarlyException`` so later chapters do not
-    build mobjects. Raises ``ValueError`` if the target section name is not found.
+    build mobjects. When ``scene_name`` is set, only that scene is rewritten —
+    sibling scenes in the same file are untouched.
+    Raises ``ValueError`` if the target section name is not found.
     """
     if not section_name:
         raise ValueError("section_name must be non-empty")
     module = cst.parse_module(source)
-    if section_name not in _iter_section_names(module):
-        raise ValueError(f"section not found: {section_name!r}")
+    if section_name not in _iter_section_names(module, scene_name):
+        where = f" in scene {scene_name!r}" if scene_name else ""
+        raise ValueError(f"section not found{where}: {section_name!r}")
     # Skip animations before the target (later code is cut by early exit).
-    updated = module.visit(_SkipUntilSectionTransformer(section_name))
-    early = _InsertEarlyExitAfterSection(section_name)
+    updated = module.visit(
+        _SkipUntilSectionTransformer(section_name, scene_name)
+    )
+    early = _InsertEarlyExitAfterSection(section_name, scene_name)
     updated = updated.visit(early)
     if early.inserted:
         updated = _ensure_early_exit_import_module(updated)
@@ -500,11 +577,15 @@ def render_scene(
                     transformed, scene_name, method
                 )
             # section_only wins over skip_until when both are set.
+            # Always scope to scene_name so multi-scene files cannot rewrite
+            # a sibling / previous scene's construct.
             if section_only:
-                transformed = _apply_section_only(transformed, section_only)
+                transformed = _apply_section_only(
+                    transformed, section_only, scene_name
+                )
             elif skip_until_section:
                 transformed = _apply_skip_until_section(
-                    transformed, skip_until_section
+                    transformed, skip_until_section, scene_name
                 )
         except ValueError as exc:
             return RenderResult(ok=False, error=str(exc), cwd=str(cwd))

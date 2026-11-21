@@ -98,16 +98,24 @@ export function activate(context: vscode.ExtensionContext): void {
           sidecar,
           outlineProvider,
           output,
-          item
+          item,
+          outlineTree
         );
       }
     ),
     vscode.commands.registerCommand(
       "manimDock.renderFullScene",
       async (item?: unknown) => {
-        await renderSceneCommand(sidecar, outlineProvider, output, item, {
-          titleSuffix: " (full)",
-        });
+        await renderSceneCommand(
+          sidecar,
+          outlineProvider,
+          output,
+          item,
+          {
+            titleSuffix: " (full)",
+          },
+          outlineTree
+        );
       }
     ),
     vscode.commands.registerCommand(
@@ -139,10 +147,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "manimDock.renderWithSections",
       async (item?: unknown) => {
-        await renderSceneCommand(sidecar, outlineProvider, output, item, {
-          saveSections: true,
-          titleSuffix: " (sections)",
-        });
+        await renderSceneCommand(
+          sidecar,
+          outlineProvider,
+          output,
+          item,
+          {
+            saveSections: true,
+            titleSuffix: " (sections)",
+          },
+          outlineTree
+        );
       }
     ),
     vscode.commands.registerCommand(
@@ -163,7 +178,8 @@ export function activate(context: vscode.ExtensionContext): void {
           sidecar,
           outlineProvider,
           output,
-          item
+          item,
+          outlineTree
         );
       }
     ),
@@ -979,7 +995,8 @@ async function resolveCurrentSectionName(
   }
 
   const fromCaret = line != null ? sectionNameAtLine(scene, line) : undefined;
-  const fromStage = StageTimelinePanel.currentSectionIfOpen(filePath);
+  // Stage scrub only counts when it is open on this same scene (not a sibling).
+  const fromStage = StageTimelinePanel.currentSectionIfOpen(filePath, sceneName);
   const section = fromCaret || fromStage || sections[0];
   return { sections, section };
 }
@@ -988,9 +1005,15 @@ async function renderCurrentSectionCommand(
   sidecar: SidecarClient,
   outlineProvider: OutlineProvider,
   output: vscode.OutputChannel,
-  item?: unknown
+  item?: unknown,
+  outlineTree?: vscode.TreeView<unknown>
 ): Promise<void> {
-  const target = await resolveSceneTarget(outlineProvider, output, item);
+  const target = await resolveSceneTarget(
+    outlineProvider,
+    output,
+    item,
+    outlineTree
+  );
   if (!target) {
     return;
   }
@@ -1000,9 +1023,16 @@ async function renderCurrentSectionCommand(
     target.sceneName
   );
   if (!sections.length || !section) {
-    await renderSceneCommand(sidecar, outlineProvider, output, item, {
-      titleSuffix: " (full — no next_section)",
-    });
+    await renderSceneCommand(
+      sidecar,
+      outlineProvider,
+      output,
+      { filePath: target.filePath, scene: { name: target.sceneName } },
+      {
+        titleSuffix: " (full — no next_section)",
+      },
+      outlineTree
+    );
     return;
   }
   await renderSceneCommand(
@@ -1013,7 +1043,8 @@ async function renderCurrentSectionCommand(
     {
       sectionOnly: section,
       titleSuffix: ` · ${section}`,
-    }
+    },
+    outlineTree
   );
 }
 
@@ -1046,9 +1077,15 @@ async function renderSkipToSectionCommand(
   sidecar: SidecarClient,
   outlineProvider: OutlineProvider,
   output: vscode.OutputChannel,
-  item?: unknown
+  item?: unknown,
+  outlineTree?: vscode.TreeView<unknown>
 ): Promise<void> {
-  const target = await resolveSceneTarget(outlineProvider, output, item);
+  const target = await resolveSceneTarget(
+    outlineProvider,
+    output,
+    item,
+    outlineTree
+  );
   if (!target) {
     return;
   }
@@ -1080,7 +1117,8 @@ async function renderSkipToSectionCommand(
     {
       sectionOnly: picked,
       titleSuffix: ` · ${picked}`,
-    }
+    },
+    outlineTree
   );
 }
 
@@ -1223,9 +1261,15 @@ async function renderSceneCommand(
   outlineProvider: OutlineProvider,
   output: vscode.OutputChannel,
   item?: unknown,
-  options?: RenderOptions & { titleSuffix?: string }
+  options?: RenderOptions & { titleSuffix?: string },
+  outlineTree?: vscode.TreeView<unknown>
 ): Promise<void> {
-  const target = await resolveSceneTarget(outlineProvider, output, item);
+  const target = await resolveSceneTarget(
+    outlineProvider,
+    output,
+    item,
+    outlineTree
+  );
   if (!target) {
     return;
   }

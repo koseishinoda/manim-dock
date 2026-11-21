@@ -6,7 +6,12 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from manim_dock.snapshot import inject_early_exit, snapshot_at_line, snapshot_cache_key
+from manim_dock.snapshot import (
+    inject_early_exit,
+    inject_still_saves_and_early_exit,
+    snapshot_at_line,
+    snapshot_cache_key,
+)
 from manim_dock.stage_transform import (
     discover_focus_sections,
     elide_unfocused_section_bodies,
@@ -14,6 +19,7 @@ from manim_dock.stage_transform import (
     section_name_at_line,
     stage_fast_play_patches,
     strip_other_scene_classes,
+    strip_prior_section_animations,
 )
 
 FOCUS_SAMPLE = '''
@@ -384,7 +390,7 @@ def test_resolve_stage_elide_only_when_focused():
     assert resolve_stage_elide_section(FOCUS_SAMPLE, "Demo", alpha_line) is None
 
 
-def test_resolve_stage_elide_without_focus_uses_section():
+def test_resolve_stage_elide_without_focus_keeps_full_prefix():
     src = '''
 from manim import *
 class Demo(Scene):
@@ -396,7 +402,8 @@ class Demo(Scene):
 '''
     lines = src.splitlines()
     beta = next(i for i, ln in enumerate(lines, 1) if 'Text("b")' in ln)
-    assert resolve_stage_elide_section(src, "Demo", beta) == "Beta"
+    # No focus() → never body-elide (correctness over Stage speed).
+    assert resolve_stage_elide_section(src, "Demo", beta) is None
 
 
 def test_strip_other_scene_classes():
@@ -424,3 +431,115 @@ def test_elide_keeps_preamble_defs_and_focused_body():
     assert "active_panel = VGroup()" in out
     assert "Text('H')" in out or 'Text("H")' in out
     assert "Gamma" in out and "Alpha" in out
+
+
+def test_inject_still_saves_and_early_exit_one_pass():
+    src = '''
+from manim import *
+class Demo(Scene):
+    def construct(self):
+        self.next_section("A")
+        self.play(FadeIn(Text("a")))
+        self.wait(0.1)
+        self.play(FadeIn(Text("b")))
+'''
+    lines = src.splitlines()
+    play_ends = [
+        i for i, ln in enumerate(lines, 1) if "self.play" in ln or "self.wait" in ln
+    ]
+    # end lines ≈ statement lines for single-line calls
+    line_to_key = {ln: f"k{ln}" for ln in play_ends}
+    out = inject_still_saves_and_early_exit(
+        src, "Demo", line_to_key, until_line=max(play_ends)
+    )
+    assert out.count("_manim_dock_still") == len(play_ends)
+    assert "EndSceneEarlyException" in out
+    # Saves must appear before the early exit.
+    assert out.rfind("_manim_dock_still") < out.rfind("EndSceneEarlyException")
+
+
+def test_strip_prior_section_animations_keeps_locals():
+    src = '''
+from manim import *
+class Demo(Scene):
+    def construct(self):
+        self.next_section("Alpha")
+        a = MathTex(r"a")
+        self.play(FadeIn(a))
+        self.wait(0.1)
+        self.next_section("Beta")
+        self.play(FadeIn(a))
+'''
+    out = strip_prior_section_animations(src, "Demo", "Beta")
+    assert "MathTex" in out
+    assert "FadeIn(a)" in out  # kept in Beta
+    # Alpha play/wait stripped; assignment kept (ast.unparse may use single quotes).
+    import re
+
+    parts = re.split(r"next_section\(['\"]Beta['\"]\)", out, maxsplit=1)
+    assert len(parts) == 2
+    alpha, beta = parts
+    assert "MathTex" in alpha
+    assert "self.play" not in alpha
+    assert "self.wait" not in alpha
+    assert "self.play" in beta
+
+
+def test_snapshot_fallback_aliases_primary_cache_key(tmp_path: Path):
+    """When body elision fails, the PNG must still land under the primary key."""
+    src = '''
+from manim import *
+class Demo(Scene):
+    def construct(self):
+        self.next_section("Alpha")
+        geom = MathTex(r"g")
+        self.play(FadeIn(geom))
+        self.focus()
+        self.next_section("Beta")
+        self.play(FadeIn(geom))
+'''
+    path = tmp_path / "demo.py"
+    path.write_text(src)
+    lines = src.splitlines()
+    beta_line = next(i for i, ln in enumerate(lines, 1) if 'next_section("Beta")' in ln)
+    # Cursor on Beta play line.
+    play_line = next(i for i, ln in enumerate(lines, 1) if i > beta_line and "FadeIn(geom)" in ln)
+
+    primary = snapshot_cache_key(
+        src, "Demo", play_line, quality="l", file_path=path, stage_elide_section="Beta"
+    )
+    # focus() enables body elision; that drops Alpha's ``geom =`` → NameError;
+    # anim-strip / full should succeed and alias onto the primary key.
+    with patch("manim_dock.snapshot._capture_inprocess") as inproc:
+        calls = {"n": 0}
+
+        def fake_capture(**kwargs):
+            calls["n"] += 1
+            code = kwargs["transformed"]
+            cached = kwargs["cached_png"]
+            base = kwargs["base"]
+            # Body-elide transform has stub / no geom assign before Beta.
+            if "geom = MathTex" not in code.split("Beta", 1)[0]:
+                base.ok = False
+                base.error = "name 'geom' is not defined"
+                return base
+            cached.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+            base.ok = True
+            base.engine = "inprocess"
+            base.png_path = str(cached.resolve())
+            return base
+
+        inproc.side_effect = fake_capture
+        result = snapshot_at_line(
+            path,
+            "Demo",
+            play_line,
+            source=src,
+            quality="l",
+            cache_dir=tmp_path,
+            prefer_inprocess=True,
+        )
+    assert result.ok
+    assert (tmp_path / f"{primary}.png").is_file()
+    assert result.cache_key == primary
+    assert calls["n"] >= 2  # body fail + anim-strip (or full)

@@ -152,16 +152,27 @@ def _event_from_call(node: ast.Call) -> PlayOrWait | None:
 
 
 def _events_in_function(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> list[PlayOrWait]:
+    """Events in this method body only — skip nested ``def`` / ``class`` helpers."""
     events: list[PlayOrWait] = []
 
     class Visitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
         def visit_Call(self, node: ast.Call) -> None:
             event = _event_from_call(node)
             if event is not None:
                 events.append(event)
             self.generic_visit(node)
 
-    Visitor().visit(fn)
+    for stmt in fn.body:
+        Visitor().visit(stmt)
     return events
 
 

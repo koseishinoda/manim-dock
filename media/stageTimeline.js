@@ -643,28 +643,26 @@ function highlightTimelineLine(line) {
   pendingHighlightLine = line;
   pendingHighlightTime = null;
   const rows = Array.from(rowsEl.querySelectorAll('.row'));
-  let best = null;
-  let bestScore = Infinity;
+  // Match Stage still mapping: containing statement, else last finished beat.
+  // Do not jump ahead to the next play just because it is nearer in the file.
+  let containing = null;
+  let lastLe = null;
   rows.forEach((row) => {
     const start = Number(row.dataset.startLine || 0);
     const end = Number(row.dataset.endLine || start);
     const kind = row.dataset.kind || '';
     if (!start && !end) return;
-    let dist;
-    if (line >= start && line <= end) {
-      dist = 0;
-    } else {
-      dist = Math.min(Math.abs(line - start), Math.abs(line - end));
-      if (dist > 3) return;
+    if (kind !== 'next_section' && kind !== 'play' && kind !== 'wait' && kind !== 'add') {
+      return;
     }
-    const kindPenalty = (kind === 'play' || kind === 'wait' || kind === 'add') ? 0 : 0.4;
-    const score = dist + kindPenalty;
-    if (score < bestScore) {
-      best = row;
-      bestScore = score;
+    if (line >= start && line <= end) {
+      containing = row;
+    }
+    if (end <= line) {
+      lastLe = row;
     }
   });
-  setActiveRow(best);
+  setActiveRow(containing || lastLe);
 }
 
 function highlightTime(time) {
@@ -719,8 +717,13 @@ window.addEventListener('message', (event) => {
       scrubEl.value = String(msg.time);
       if (scrubLabel) scrubLabel.textContent = fmt(msg.time) + 's';
     }
-    // Keep last still while a new capture is in flight (dimmed via pending).
-    highlightTime(scrubTime);
+    // Editor/Outline sync passes activeUntilLine — highlight by source line so
+    // Timeline matches the Stage still (highlightTime alone can disagree).
+    if (scrubUntilLine != null && scrubUntilLine > 0) {
+      highlightTimelineLine(scrubUntilLine);
+    } else {
+      highlightTime(scrubTime);
+    }
     updateChromeTitle();
   } else if (msg.type === 'snapshot') {
     if (msg.pending) {

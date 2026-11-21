@@ -8,6 +8,7 @@ from unittest.mock import patch
 from manim_dock.still_index import (
     beat_for_line,
     build_index_beats,
+    clear_beats_cache,
     still_get,
     still_index,
     still_index_status,
@@ -28,6 +29,7 @@ class Demo(Scene):
 
 
 def test_build_index_beats_ordered():
+    clear_beats_cache()
     beats = build_index_beats("demo.py", "Demo", source=SAMPLE, quality="l")
     kinds = [b.kind for b in beats]
     assert "next_section" in kinds
@@ -35,12 +37,14 @@ def test_build_index_beats_ordered():
     assert "wait" in kinds
     assert beats[0].ordinal == 0
     assert beats[-1].ordinal == len(beats) - 1
-    # Keys are stable for the same prefix.
+    # Same source → memoized list (interactive still_get must stay cheap).
     again = build_index_beats("demo.py", "Demo", source=SAMPLE, quality="l")
+    assert again is beats
     assert [b.cache_key for b in beats] == [b.cache_key for b in again]
 
 
 def test_beat_for_line_picks_last_le():
+    clear_beats_cache()
     beats = build_index_beats("demo.py", "Demo", source=SAMPLE, quality="l")
     play = next(b for b in beats if b.kind == "play")
     assert beat_for_line(beats, play.source_line) is play
@@ -48,6 +52,35 @@ def test_beat_for_line_picks_last_le():
     assert later is not None and later.source_line >= play.source_line
     # Cursor above the first beat → no beat yet (caller uses raw line).
     assert beat_for_line(beats, 1) is None
+
+
+def test_beat_for_line_prefers_containing_multiline_play():
+    """Cursor on the first line of a multi-line play must not map to the prior beat."""
+    clear_beats_cache()
+    src = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        self.next_section("Intro")
+        self.play(Write(Text("a")))
+        self.play(
+            Write(Text("b")),
+            run_time=1,
+        )
+        self.wait(0.2)
+'''
+    beats = build_index_beats("demo.py", "Demo", source=src, quality="l")
+    plays = [b for b in beats if b.kind == "play"]
+    assert len(plays) >= 2
+    first, second = plays[0], plays[1]
+    assert second.start_line < second.source_line
+    # Mid-span of the second play → second beat (not first).
+    mid = second.start_line
+    assert beat_for_line(beats, mid) is second
+    # Between first end and second start → first beat.
+    if second.start_line > first.source_line + 1:
+        assert beat_for_line(beats, first.source_line + 1) is first
 
 
 def test_still_get_cache_hit(tmp_path: Path):

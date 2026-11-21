@@ -291,43 +291,44 @@ export class StageTimelinePanel {
     this.scheduleSnapshot(line);
   }
 
-  /** Timeline time for a 1-based source line (section / play / wait / add). */
+  /**
+   * Timeline time for a 1-based source line (section / play / wait / add).
+   * Same rule as Python ``beat_for_line``: containing statement, else last
+   * finished beat — never jump ahead to the next play just because it is nearer.
+   */
   private timeAtSourceLine(line: number): number | undefined {
     const events = this.timeline?.events ?? [];
-    let best: TimelineEvent | undefined;
-    let bestScore = Infinity;
+    let containing: TimelineEvent | undefined;
+    let lastLe: TimelineEvent | undefined;
     for (const ev of events) {
+      if (
+        ev.kind !== "next_section" &&
+        ev.kind !== "play" &&
+        ev.kind !== "wait" &&
+        ev.kind !== "add"
+      ) {
+        continue;
+      }
       const startLine = ev.range?.start_line ?? 0;
       const endLine = ev.range?.end_line ?? startLine;
       if (!startLine && !endLine) {
         continue;
       }
-      let dist: number;
       if (line >= startLine && line <= endLine) {
-        dist = 0;
-      } else {
-        dist = Math.min(Math.abs(line - startLine), Math.abs(line - endLine));
-        if (dist > 8) {
-          continue;
-        }
+        containing = ev;
       }
-      // Prefer section markers and beats over other kinds when tied.
-      const kindBonus =
-        ev.kind === "next_section"
-          ? 0
-          : ev.kind === "play" || ev.kind === "wait" || ev.kind === "add"
-            ? 0.05
-            : 0.2;
-      const score = dist + kindBonus;
-      if (score < bestScore) {
-        bestScore = score;
-        best = ev;
+      if (endLine <= line) {
+        lastLe = ev;
       }
     }
-    if (!best) {
+    const pick = containing ?? lastLe;
+    if (!pick) {
       return undefined;
     }
-    return best.start ?? 0;
+    // Scrub to the end of the beat so Stage "after this statement" matches.
+    const start = pick.start ?? 0;
+    const dur = pick.duration ?? 0;
+    return start + Math.max(0, dur);
   }
 
   private stageRefreshMode(): "onIdle" | "onSave" | "manual" {
@@ -341,25 +342,56 @@ export class StageTimelinePanel {
   }
 
   private currentPreferSection(): string | undefined {
+    return this.sectionAtLine(
+      this.activeUntilLineAt(this.lastScrubTime) ?? 0
+    );
+  }
+
+  /** Enclosing ``next_section`` title for a 1-based source line. */
+  private sectionAtLine(line: number): string | undefined {
     const events = this.timeline?.events ?? [];
-    const t = this.lastScrubTime;
+    if (line < 1) {
+      const t = this.lastScrubTime;
+      let section = "";
+      for (const ev of events) {
+        if ((ev.start ?? 0) <= t + 1e-9) {
+          if (ev.kind === "next_section") {
+            section = ev.label || section;
+          } else if (ev.section) {
+            section = ev.section;
+          }
+        }
+      }
+      return section || undefined;
+    }
     let section = "";
     for (const ev of events) {
-      if ((ev.start ?? 0) <= t + 1e-9) {
-        if (ev.kind === "next_section") {
-          section = ev.label || section;
-        } else if (ev.section) {
-          section = ev.section;
-        }
+      const start = ev.range?.start_line ?? 0;
+      if (!start || start > line) {
+        continue;
+      }
+      if (ev.kind === "next_section") {
+        section = (ev.section || ev.label || section).trim();
+      } else if (ev.section) {
+        section = ev.section;
       }
     }
     return section || undefined;
   }
 
-  /** Section label under the Stage scrub for ``filePath``, if this panel is open on it. */
-  static currentSectionIfOpen(filePath: string): string | undefined {
+  /**
+   * Section label under the Stage scrub for ``filePath`` / ``sceneName``,
+   * if this panel is open on that exact scene (not a sibling in the same file).
+   */
+  static currentSectionIfOpen(
+    filePath: string,
+    sceneName?: string
+  ): string | undefined {
     const cur = StageTimelinePanel.current;
     if (!cur?.filePath || cur.filePath !== filePath) {
+      return undefined;
+    }
+    if (sceneName && cur.sceneName !== sceneName) {
       return undefined;
     }
     return cur.currentPreferSection();
@@ -387,10 +419,11 @@ export class StageTimelinePanel {
       clearTimeout(this.indexTimer);
       this.indexTimer = undefined;
     }
-    // Abort an in-flight index beat so interactive Stage is not blocked.
+    // Soft-cancel only: bump generation so the index loop stops after the
+    // current beat. Do **not** kill the warm ``manim_dock serve`` worker —
+    // that forced a cold Manim re-import on every cursor move (~2s+).
     if (this.indexRunning) {
       this.indexGeneration += 1;
-      this.sidecar.disposeWorker();
     }
   }
 
@@ -443,6 +476,7 @@ export class StageTimelinePanel {
           break;
         }
         const prefer = this.currentPreferSection();
+        // maxBeats 0 ⇒ one-pass section ladder (O(prefix) once per section).
         const result = await this.sidecar.stillIndex(
           this.filePath,
           this.sceneName,
@@ -450,9 +484,9 @@ export class StageTimelinePanel {
           cacheDir,
           {
             quality: "l",
-            maxBeats: 1,
+            maxBeats: 0,
             preferSection: prefer,
-            timeoutSec: 180,
+            timeoutSec: 300,
           }
         );
         if (generation !== this.indexGeneration) {
@@ -511,7 +545,7 @@ export class StageTimelinePanel {
     this.snapshotTimer = setTimeout(() => {
       this.snapshotTimer = undefined;
       void this.fetchSnapshot(generation, activeUntilLine);
-    }, 700);
+    }, 180);
   }
 
   private notifySnapshotFail(err: string): void {
@@ -540,19 +574,70 @@ export class StageTimelinePanel {
     const cacheDir = snapshotCacheDir(this.context);
     try {
       const doc = await vscode.workspace.openTextDocument(this.filePath);
+      const source = doc.getText();
       this.output.appendLine(
         `[stage-snapshot] get line=${activeUntilLine} scene=${this.sceneName} cache=${cacheDir}`
       );
-      const result = await this.sidecar.stillGet(
+      // Fundamental contract: interactive path is **lookup first**. A miss must
+      // not re-pay O(construct)×every cursor move — fill the section once via
+      // ladder, then serve the PNG from the index.
+      let result = await this.sidecar.stillGet(
         this.filePath,
         this.sceneName,
         activeUntilLine,
-        doc.getText(),
+        source,
         cacheDir,
         "l",
         120,
-        true
+        false
       );
+      if (generation !== this.snapshotGeneration) {
+        this.output.appendLine(
+          `[stage-snapshot] drop late result gen=${generation}`
+        );
+        return;
+      }
+      if ((!result.ok || !result.png_path) && generation === this.snapshotGeneration) {
+        const prefer = this.sectionAtLine(activeUntilLine);
+        this.output.appendLine(
+          `[stage-snapshot] miss → section ladder` +
+            (prefer ? ` section=${prefer}` : "")
+        );
+        const indexed = await this.sidecar.stillIndex(
+          this.filePath,
+          this.sceneName,
+          source,
+          cacheDir,
+          {
+            quality: "l",
+            maxBeats: 0,
+            preferSection: prefer,
+            timeoutSec: 300,
+          }
+        );
+        if (generation !== this.snapshotGeneration) {
+          return;
+        }
+        if (indexed.total > 0) {
+          this.indexCached = indexed.cached;
+          this.indexTotal = indexed.total;
+          this.postIndexStatus();
+        }
+        this.output.appendLine(
+          `[still-index] ladder built=${indexed.built} ${indexed.cached}/${indexed.total}` +
+            (indexed.error ? ` err=${indexed.error}` : "")
+        );
+        result = await this.sidecar.stillGet(
+          this.filePath,
+          this.sceneName,
+          activeUntilLine,
+          source,
+          cacheDir,
+          "l",
+          120,
+          true
+        );
+      }
       if (generation !== this.snapshotGeneration) {
         this.output.appendLine(
           `[stage-snapshot] drop late result gen=${generation}`
@@ -705,49 +790,55 @@ export class StageTimelinePanel {
       "l";
     const sceneName = this.sceneName;
     const filePath = this.filePath;
+    // Soft-pause Stage index so QL is not queued behind a ladder on the worker.
+    this.pauseIndex();
     this.output.show(true);
     this.output.appendLine(
       `\n=== Render ${sceneName} · ${section} (${filePath}) quality=${quality} section_only ===`
     );
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `Manim Dock: rendering ${section}…`,
-        cancellable: false,
-      },
-      async () => {
-        try {
-          const result = await this.sidecar.render(
-            filePath,
-            sceneName,
-            quality,
-            (chunk) => {
-              this.output.append(chunk);
-            },
-            { sectionOnly: section }
-          );
-          if (result.log_tail) {
-            this.output.appendLine("\n--- log tail ---");
-            this.output.appendLine(result.log_tail);
-          }
-          if (!result.ok || !result.output_path) {
-            void vscode.window.showErrorMessage(
-              `Manim Dock render failed: ${result.error ?? "unknown error"}. See “Manim Dock” output.`
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Manim Dock: rendering ${section}…`,
+          cancellable: false,
+        },
+        async () => {
+          try {
+            const result = await this.sidecar.render(
+              filePath,
+              sceneName,
+              quality,
+              (chunk) => {
+                this.output.append(chunk);
+              },
+              { sectionOnly: section }
             );
-            return;
+            if (result.log_tail) {
+              this.output.appendLine("\n--- log tail ---");
+              this.output.appendLine(result.log_tail);
+            }
+            if (!result.ok || !result.output_path) {
+              void vscode.window.showErrorMessage(
+                `Manim Dock render failed: ${result.error ?? "unknown error"}. See “Manim Dock” output.`
+              );
+              return;
+            }
+            PreviewPanel.show(result.output_path, `${sceneName} · ${section}`);
+            void vscode.window.showInformationMessage(
+              `Manim Dock: rendered ${section}`
+            );
+          } catch (err) {
+            this.output.appendLine(String(err));
+            void vscode.window.showErrorMessage(
+              `Manim Dock render failed: ${String(err)}. Check the Manim Dock output and your Python/Manim install.`
+            );
           }
-          PreviewPanel.show(result.output_path, `${sceneName} · ${section}`);
-          void vscode.window.showInformationMessage(
-            `Manim Dock: rendered ${section}`
-          );
-        } catch (err) {
-          this.output.appendLine(String(err));
-          void vscode.window.showErrorMessage(
-            `Manim Dock render failed: ${String(err)}. Check the Manim Dock output and your Python/Manim install.`
-          );
         }
-      }
-    );
+      );
+    } finally {
+      this.resumeIndex();
+    }
   }
 
   private async handleReorder(rec: Record<string, unknown>): Promise<void> {

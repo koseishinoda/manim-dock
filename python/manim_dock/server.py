@@ -214,7 +214,9 @@ def _handle(method: str, params: dict[str, Any]) -> Any:
         quality = params.get("quality") or "l"
         source = params.get("source")
         timeout = params.get("timeout")
-        max_beats = int(params.get("max_beats") or 1)
+        raw_max = params.get("max_beats")
+        # 0 / negative ⇒ fill preferred section in one ladder pass.
+        max_beats = 1 if raw_max is None else int(raw_max)
         prefer = params.get("prefer_section")
         return still_index(
             path,

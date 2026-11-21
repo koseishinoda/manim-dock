@@ -143,14 +143,20 @@ def resolve_stage_elide_section(
     active_until_line: int,
     section_hint: str | None = None,
 ) -> str | None:
-    """Section to try body-elision for, or None."""
+    """Section to try body-elision for, or None.
+
+    Body elision only when ``self.focus()`` marks the cursor section.
+    Scenes without ``focus()`` keep the full construct prefix — otherwise
+    early exit at a late ``next_section`` can cache a preamble-only still
+    (NameError-free success) while mid-section needs prior locals.
+    """
     section = section_hint or section_name_at_line(
         source, scene_name, active_until_line
     )
     if not section:
         return None
     focused = discover_focus_sections(source, scene_name)
-    if focused is not None and section not in focused:
+    if focused is None or section not in focused:
         return None
     return section
 
@@ -191,6 +197,55 @@ def elide_unfocused_section_bodies(
     if not injected_stub:
         return source
 
+    construct.body = new_body
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
+
+
+def strip_prior_section_animations(
+    source: str, scene_name: str, keep_section: str
+) -> str:
+    """Drop ``play`` / ``wait`` / ``add`` / ``focus`` in sections before ``keep_section``.
+
+    Keeps assignments and other setup so later chapters that need prior locals
+    still run — slower than full body elision, much faster than replaying every
+    prior animation.
+    """
+    if not keep_section:
+        return source
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+    if not isinstance(tree, ast.Module):
+        return source
+    construct = _find_scene_construct(tree, scene_name)
+    if construct is None:
+        return source
+
+    skip_methods = ("play", "wait", "add", "focus")
+    new_body: list[ast.stmt] = []
+    current: str | None = None
+    changed = False
+    for stmt in construct.body:
+        name = _next_section_name(stmt)
+        if name is not None:
+            current = name
+            new_body.append(stmt)
+            continue
+        if current is None or current == keep_section:
+            new_body.append(stmt)
+            continue
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            new_body.append(stmt)
+            continue
+        if any(_is_self_method_expr(stmt, method) for method in skip_methods):
+            changed = True
+            continue
+        new_body.append(stmt)
+
+    if not changed:
+        return source
     construct.body = new_body
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)

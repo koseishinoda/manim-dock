@@ -6,24 +6,38 @@ Derived cache only — never project truth. Keys reuse ``snapshot_cache_key``
 
 from __future__ import annotations
 
+import hashlib
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from manim_dock.snapshot import (
+    SnapshotResult,
+    _capture_inprocess,
     _png_size,
+    inject_still_saves_and_early_exit,
     local_import_fingerprint,
     snapshot_at_line,
     snapshot_cache_key,
 )
 from manim_dock.stage_transform import (
     construct_prefix_canonical_many,
-    discover_focus_sections,
+    elide_unfocused_section_bodies,
     resolve_stage_elide_section,
+    strip_other_scene_classes,
+    strip_prior_section_animations,
 )
 from manim_dock.timeline import SceneTimeline, parse_file_timeline, parse_scene_timeline
 
 INDEXABLE_KINDS = frozenset({"play", "wait", "add", "next_section"})
+
+# Interactive ``still_get`` rebuilds beats on every cursor move; cache by
+# (path, scene, quality, source digest) so PNG hits stay cheap on long files.
+_BEATS_CACHE: OrderedDict[tuple[str, str, str, str], list["IndexBeat"]] = (
+    OrderedDict()
+)
+_BEATS_CACHE_MAX = 12
 
 
 @dataclass
@@ -31,9 +45,10 @@ class IndexBeat:
     ordinal: int
     kind: str
     label: str
-    source_line: int
+    source_line: int  # 1-based end line (capture / cache anchor)
     section: str
     cache_key: str
+    start_line: int = 0  # 1-based start line of the statement (multi-line plays)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -116,6 +131,15 @@ def _read_source(file_path: str | Path, source: str | None) -> str:
     return Path(file_path).read_text(encoding="utf-8")
 
 
+def _source_digest(src: str) -> str:
+    return hashlib.sha256(src.encode("utf-8")).hexdigest()
+
+
+def clear_beats_cache() -> None:
+    """Drop memoized index beats (tests / source reload)."""
+    _BEATS_CACHE.clear()
+
+
 def build_index_beats(
     file_path: str | Path,
     scene_name: str,
@@ -124,43 +148,48 @@ def build_index_beats(
     quality: str = "l",
 ) -> list[IndexBeat]:
     """Timeline events → index beats with prefix cache keys."""
-    src = _read_source(file_path, source)
-    tl = _timeline(file_path, scene_name, src)
-    path = Path(file_path)
-    events: list[tuple[Any, int, str]] = []
+    path = Path(file_path).resolve()
+    src = _read_source(path, source)
+    q = (quality or "l").strip().lower()
+    cache_key = (str(path), scene_name, q, _source_digest(src))
+    cached = _BEATS_CACHE.get(cache_key)
+    if cached is not None:
+        _BEATS_CACHE.move_to_end(cache_key)
+        return cached
+
+    tl = _timeline(path, scene_name, src)
+    events: list[tuple[Any, int, int, str]] = []
     lines: list[int] = []
     for ev in tl.events:
         if ev.kind not in INDEXABLE_KINDS:
             continue
-        line = int(ev.range.end_line or ev.range.start_line or 0)
-        if line < 1 and ev.kind != "next_section":
+        start = int(ev.range.start_line or 0)
+        end = int(ev.range.end_line or start or 0)
+        if end < 1 and ev.kind != "next_section":
             continue
+        if start < 1:
+            start = end
         section = ev.section or ""
-        events.append((ev, line, section))
-        lines.append(line)
+        events.append((ev, start, end, section))
+        lines.append(end)
 
     prefixes = construct_prefix_canonical_many(src, scene_name, lines)
     imports = local_import_fingerprint(path, src)
-    focused = discover_focus_sections(src, scene_name)
 
     beats: list[IndexBeat] = []
-    for ev, line, section in events:
-        if focused is not None and section and section not in focused:
-            elide = None
-        elif section:
-            elide = section
-        else:
-            elide = resolve_stage_elide_section(
-                src, scene_name, line, section_hint=None
-            )
+    for ev, start, end, section in events:
+        # Same gate as snapshot_at_line: body-elide only for focus() sections.
+        elide = resolve_stage_elide_section(
+            src, scene_name, end, section_hint=section or None
+        )
         key = snapshot_cache_key(
             src,
             scene_name,
-            line,
+            end,
             quality=quality,
             file_path=path,
             stage_elide_section=elide,
-            prefix=prefixes.get(line),
+            prefix=prefixes.get(end),
             imports=imports,
         )
         beats.append(
@@ -168,11 +197,17 @@ def build_index_beats(
                 ordinal=len(beats),
                 kind=ev.kind,
                 label=ev.label,
-                source_line=line,
+                source_line=end,
                 section=section,
                 cache_key=key,
+                start_line=start,
             )
         )
+
+    _BEATS_CACHE[cache_key] = beats
+    _BEATS_CACHE.move_to_end(cache_key)
+    while len(_BEATS_CACHE) > _BEATS_CACHE_MAX:
+        _BEATS_CACHE.popitem(last=False)
     return beats
 
 
@@ -219,16 +254,28 @@ def _counts(beats: list[IndexBeat], cache_dir: Path) -> tuple[int, int, int | No
 
 
 def beat_for_line(beats: list[IndexBeat], line: int) -> IndexBeat | None:
-    """Last index beat with ``source_line <= line`` (Stage cursor semantics)."""
+    """Map editor/scrub line → index beat (aligned with ``inject_early_exit``).
+
+    Prefer the beat whose statement **contains** ``line`` (so a multi-line
+    ``self.play`` under the cursor is not mapped to the previous beat).
+    Otherwise use the last beat with ``source_line <= line``.
+    """
     if line < 1:
         return beats[0] if beats else None
-    best: IndexBeat | None = None
+    containing: IndexBeat | None = None
+    last_le: IndexBeat | None = None
     for b in beats:
-        if b.source_line <= line:
-            best = b
-        else:
+        start = b.start_line if b.start_line > 0 else b.source_line
+        end = b.source_line
+        if start <= line <= end:
+            containing = b
+        if end <= line:
+            last_le = b
+        elif containing is None and last_le is not None and end > line:
+            # Beats are ordered by end line; once past the cursor and we already
+            # have a predecessor, further beats cannot be last_le.
             break
-    return best
+    return containing if containing is not None else last_le
 
 
 def still_index_status(
@@ -387,6 +434,114 @@ def still_get(
     )
 
 
+def _prepare_ladder_source(
+    source: str,
+    scene_name: str,
+    *,
+    keep_section: str,
+    until_line: int,
+    line_to_key: dict[int, str],
+    mode: str,
+) -> str:
+    """Build temp source for a one-pass ladder (``mode``: body|anims|full).
+
+    Still-saves + early-exit share one AST pass so beat line numbers stay valid.
+    Elision/strip run afterward (they key off section names, not lines).
+    """
+    code = inject_still_saves_and_early_exit(
+        source, scene_name, line_to_key, until_line
+    )
+    if mode == "body" and keep_section:
+        code = elide_unfocused_section_bodies(code, scene_name, keep_section)
+    elif mode == "anims" and keep_section:
+        code = strip_prior_section_animations(code, scene_name, keep_section)
+    return strip_other_scene_classes(code, scene_name)
+
+
+def capture_section_ladder(
+    file_path: str | Path,
+    scene_name: str,
+    beats: list[IndexBeat],
+    *,
+    source: str,
+    quality: str = "l",
+    cache_dir: str | Path,
+) -> tuple[int, str, str | None]:
+    """Capture many beats in **one** construct (phase 1.5).
+
+    Returns ``(built_count, engine, error)``. Interactive Stage must not pay
+    O(prefix)×N; the idle/index path fills a section once.
+    """
+    if not beats:
+        return 0, "", None
+    path = Path(file_path).resolve()
+    root = Path(cache_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(beats, key=lambda b: (b.source_line, b.ordinal))
+    keep = ordered[0].section or ""
+    until = ordered[-1].source_line
+    line_to_key = {b.source_line: b.cache_key for b in ordered}
+    # Only body/anim strip when focus() marks this section — otherwise a
+    # successful early still-save under body elision caches a preamble-only PNG.
+    elide_ok = bool(
+        keep
+        and resolve_stage_elide_section(
+            source, scene_name, until, section_hint=keep
+        )
+    )
+    write_cwd = path.parent
+    last_png = root / f"{ordered[-1].cache_key}.png"
+    base = SnapshotResult(
+        ok=False,
+        path=str(path),
+        scene=scene_name,
+        active_until_line=until,
+        quality=quality,
+        cache_key=ordered[-1].cache_key,
+    )
+
+    for mode in ("body", "anims", "full"):
+        if mode in ("body", "anims") and not elide_ok:
+            continue
+        try:
+            transformed = _prepare_ladder_source(
+                source,
+                scene_name,
+                keep_section=keep if elide_ok else "",
+                until_line=until,
+                line_to_key=line_to_key,
+                mode=mode,
+            )
+        except (SyntaxError, ValueError) as exc:
+            if mode == "full":
+                return 0, "", str(exc)
+            continue
+        result = _capture_inprocess(
+            write_cwd=write_cwd,
+            write_path=path,
+            transformed=transformed,
+            scene_name=scene_name,
+            quality=quality,
+            cached_png=last_png,
+            base=base,
+            ladder_cache_dir=root,
+        )
+        if result is None:
+            return 0, "", "manim not available in-process"
+        built = sum(
+            1 for b in ordered if _png_cached(root, b.cache_key) is not None
+        )
+        # Body elision often dies mid-section after a few saves — keep those
+        # PNGs and continue with anim-strip / full to fill the rest.
+        if built >= len(ordered):
+            return built, result.engine or "inprocess", None
+        if mode == "full":
+            if built > 0:
+                return built, result.engine or "inprocess", None
+            return 0, result.engine or "", result.error or "ladder wrote no PNGs"
+    return 0, "", "ladder failed"
+
+
 def still_index(
     file_path: str | Path,
     scene_name: str,
@@ -398,7 +553,11 @@ def still_index(
     prefer_section: str | None = None,
     timeout: int | None = None,
 ) -> StillIndexResult:
-    """Capture up to ``max_beats`` missing stills (section-priority when set)."""
+    """Capture missing stills (section-priority).
+
+    ``max_beats < 1`` means: fill the preferred section (or first missing
+    section) in **one ladder pass** — O(prefix) once, not once per beat.
+    """
     path = Path(file_path).resolve()
     if cache_dir is None:
         return StillIndexResult(
@@ -407,8 +566,6 @@ def still_index(
             scene=scene_name,
             error="cache_dir is required",
         )
-    if max_beats < 1:
-        max_beats = 1
 
     root = Path(cache_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -434,36 +591,101 @@ def still_index(
     built = 0
     last_engine = ""
     last_section = prefer_section or ""
-    for b in ordered[:max_beats]:
-        last_section = b.section
-        snap = snapshot_at_line(
+
+    # Section ladder: one construct → many beat PNGs (fundamental index path).
+    if ordered and max_beats < 1:
+        section = ordered[0].section
+        batch = [b for b in ordered if b.section == section]
+        last_section = section
+        n, engine, err = capture_section_ladder(
             path,
             scene_name,
-            b.source_line,
+            batch,
             source=src,
             quality=quality,
             cache_dir=root,
-            timeout=timeout,
-            skip_until_section=b.section or None,
         )
-        if not snap.ok:
-            cached, total, next_ord, section = _counts(beats, root)
+        if err and n == 0:
+            cached, total, next_ord, sec = _counts(beats, root)
             return StillIndexResult(
                 ok=False,
                 path=str(path),
                 scene=scene_name,
-                built=built,
+                built=0,
                 skipped=len(beats) - len(missing),
                 cached=cached,
                 total=total,
                 complete=False,
-                next_ordinal=b.ordinal,
-                section=b.section,
-                error=snap.error or "snapshot failed",
-                last_engine=snap.engine or "",
+                next_ordinal=batch[0].ordinal,
+                section=section,
+                error=err,
+                last_engine=engine,
             )
-        built += 1
-        last_engine = snap.engine or last_engine
+        built = n
+        last_engine = engine
+    elif ordered and max_beats > 1 and ordered[0].section == ordered[
+        min(max_beats, len(ordered)) - 1
+    ].section:
+        batch = ordered[:max_beats]
+        last_section = batch[0].section
+        n, engine, err = capture_section_ladder(
+            path,
+            scene_name,
+            batch,
+            source=src,
+            quality=quality,
+            cache_dir=root,
+        )
+        if err and n == 0:
+            cached, total, next_ord, sec = _counts(beats, root)
+            return StillIndexResult(
+                ok=False,
+                path=str(path),
+                scene=scene_name,
+                built=0,
+                skipped=len(beats) - len(missing),
+                cached=cached,
+                total=total,
+                complete=False,
+                next_ordinal=batch[0].ordinal,
+                section=batch[0].section,
+                error=err,
+                last_engine=engine,
+            )
+        built = n
+        last_engine = engine
+    else:
+        limit = max(1, max_beats)
+        for b in ordered[:limit]:
+            last_section = b.section
+            snap = snapshot_at_line(
+                path,
+                scene_name,
+                b.source_line,
+                source=src,
+                quality=quality,
+                cache_dir=root,
+                timeout=timeout,
+                skip_until_section=b.section or None,
+            )
+            if not snap.ok:
+                cached, total, next_ord, section = _counts(beats, root)
+                return StillIndexResult(
+                    ok=False,
+                    path=str(path),
+                    scene=scene_name,
+                    built=built,
+                    skipped=len(beats) - len(missing),
+                    cached=cached,
+                    total=total,
+                    complete=False,
+                    next_ordinal=b.ordinal,
+                    section=b.section,
+                    error=snap.error or "snapshot failed",
+                    last_engine=snap.engine or "",
+                )
+            built += 1
+            last_engine = snap.engine or last_engine
 
     cached, total, next_ord, section = _counts(beats, root)
     complete = total > 0 and cached >= total

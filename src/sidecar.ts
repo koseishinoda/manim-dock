@@ -92,6 +92,7 @@ export interface StillGetResult {
     source_line: number;
     section: string;
     cache_key: string;
+    start_line?: number;
   } | null;
   png_path: string | null;
   width: number | null;
@@ -1300,31 +1301,17 @@ export class SidecarClient {
       method: opts?.method || null,
     };
 
-    // Prefer warm worker (shared Manim import with Stage).
+    // Always one-shot for render. The Stage warm worker is often busy with a
+    // section ladder / still_get; sharing it made ▶ QL "Render Section" appear
+    // dead (RPC queued behind a long capture). Stage keeps the warm worker.
     for (const root of roots) {
       for (const bin of bins) {
         try {
-          await this.worker.ensure(bin, root);
           onLog?.(
-            `[manim-dock] warm render ${sceneName}` +
+            `[manim-dock] render ${sceneName}` +
               (opts?.sectionOnly ? ` section_only=${opts.sectionOnly}` : "") +
               "\n"
           );
-          return await this.worker.request<RenderResult>(
-            "render",
-            params,
-            timeoutMs
-          );
-        } catch (err) {
-          errors.push(`[warm ${bin}] ${String(err)}`);
-          this.worker.dispose();
-        }
-      }
-    }
-
-    for (const root of roots) {
-      for (const bin of bins) {
-        try {
           return await runPythonJson<RenderResult>(
             bin,
             [

@@ -41,6 +41,22 @@ class Nested(Scene):
     assert events[0].label == "FadeIn group"
 
 
+def test_nested_def_plays_omitted_from_construct_outline():
+    source = '''
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        def replace_panel(new_panel):
+            self.play(FadeIn(new_panel))
+        self.play(Write(Text("Hi")))
+'''
+    outline = parse_source(source, path="<nested-def>")
+    events = outline.scenes[0].methods[0].events
+    assert [e.kind for e in events] == ["play"]
+    assert "Write" in events[0].label
+
+
 def test_play_outline_shows_object_names():
     source = '''
 from manim import *
