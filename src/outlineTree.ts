@@ -45,6 +45,7 @@ export class SceneNode extends vscode.TreeItem {
     super(scene.name, vscode.TreeItemCollapsibleState.Expanded);
     this.contextValue = "manimDock.scene";
     this.description = scene.bases.join(", ");
+    this.tooltip = `${scene.name}\nClick ▶ to render this full scene (QL)`;
     this.iconPath = new vscode.ThemeIcon("symbol-class");
     this.checkboxState = checked
       ? vscode.TreeItemCheckboxState.Checked

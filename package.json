@@ -2,7 +2,7 @@
   "name": "manim-dock",
   "displayName": "Manim Dock",
   "description": "Dock Outline, Stage, and Timeline beside ManimCE Python for educational video production.",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "publisher": "manim-dock",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -223,14 +223,9 @@
           "group": "inline@1"
         },
         {
-          "command": "manimDock.renderScene",
-          "when": "view == manimDock.outline && viewItem == manimDock.scene",
-          "group": "inline@4"
-        },
-        {
           "command": "manimDock.renderFullScene",
           "when": "view == manimDock.outline && viewItem == manimDock.scene",
-          "group": "1_render"
+          "group": "inline@4"
         },
         {
           "command": "manimDock.renderWithSections",

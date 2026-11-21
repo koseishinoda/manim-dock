@@ -2,6 +2,10 @@
 
 Versioning follows **git tags** (`v0.2.12`, …) and [GitHub Releases](https://github.com/koseishinoda/manim-dock/releases).
 
+## 0.2.15
+
+- Outline: scene-row ▶ renders the **full scene** again (section ▶ stays on `next_section` rows)
+
 ## 0.2.14
 
 - **Stage fundamental path:** interactive stills are **index lookup first**; on miss, fill the whole current section in **one construct ladder** (O(prefix) once), then scrub hits are ~1ms — not O(prefix) per cursor move

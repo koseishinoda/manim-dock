@@ -188,7 +188,7 @@ build_index(scene, from_beat=k):
 
 | Today | Target |
 |-------|--------|
-| Full-scene QL easy; section via flag | **Done:** primary play = **Render Section (QL)** (`section_only`); full scene explicit |
+| Full-scene QL easy; section via flag | **Done:** Outline scene ▶ = full scene; `next_section` ▶ / toolbar play = **Render Section (QL)** (`section_only`) |
 | `skip_until_section` / `section_only` in sidecar | `section_only` skips before **and** after the chapter |
 | Cold CLI each run | Same warm worker (Stage); render still one-shot CLI for now |
 | Partial-movie reuse | Rely on Manim cache; later hash section bodies for “unchanged → skip encode” |
